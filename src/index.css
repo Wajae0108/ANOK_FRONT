@@ -1,0 +1,30 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import 'tailwindcss';
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+* {
+  font-family: 'Plus Jakarta Sans', 'Noto Sans KR', sans-serif;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+@theme inline {
+  --color-primary: #4f6ef7;
+  --color-primary-dark: #3b5bdb;
+  --color-primary-light: #eef2ff;
+  --color-surface: #ffffff;
+  --color-bg: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-muted: #64748b;
+  --color-sidebar: #0c1120;
+  --color-sidebar-hover: #1a2540;
+  --color-sidebar-active: #4f6ef7;
+}

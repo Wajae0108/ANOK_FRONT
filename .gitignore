@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+.cache/
+.env*
+.vite/
+vite.config.*.timestamp-*
+*.tsbuildinfo
+*-debug.log*
+logs/
+*.log
+.claude-replay.*
+.tmp-*
+/.figma/design-context/
+
+# Platform-managed agentplat state, not project source. In the
+# client-initiated single-repo workspace layout (make's `Path: "."` spec) the
+# repo root IS the workspace root, so these land inside this repo rather than
+# beside it.
+/.plugins/
+/.opencode-skills/
+
+# Claude Code local session/tool state — not project source.
+/.claude/
+
+# 백엔드 API 명세 참고용 문서 — 앱 소스 아님, 로컬 참고용으로만 보관.
+/MD참조/
+/Anok 전체 시스템 상위 아키텍처 설계서 — 최종 완성본 v6.md

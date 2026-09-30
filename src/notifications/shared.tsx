@@ -1,0 +1,130 @@
+// Anok_05 — Notification 화면들이 공유하는 실시간 Inbox 훅과 표시 텍스트 매핑.
+// SSE(NTF-API-05)로 실시간 이벤트를 받고, 최초 진입/재연결 시 GET /api/notifications로 복구한다(§21 SSE Client Flow).
+import { useEffect, useRef, useState } from "react";
+import * as api from "../api/notification";
+import type { NotificationResponse, NotificationType } from "../api/notification";
+import { errorText } from "../api/errors";
+
+const PRESENTATION_TEXT: Record<NotificationType, string> = {
+  PROJECT_MEMBER_ADDED: "프로젝트에 구성원으로 추가되었습니다.",
+  TASK_ASSIGNED: "새 업무가 배정되었습니다.",
+  TASK_UNASSIGNED: "업무 담당이 변경되었습니다.",
+  TASK_DUE_SOON: "업무 마감이 임박했습니다.",
+  TASK_OVERDUE: "업무 마감일이 지났습니다.",
+  PROJECT_SCHEDULE_REMINDER: "예정된 프로젝트 일정이 있습니다.",
+  MEETING_PARTICIPANT_ADDED: "회의 참가자로 추가되었습니다.",
+  MEETING_PARTICIPATION_REMOVED: "회의 참가에서 제외되었습니다.",
+  MEETING_REMINDER: "예정된 회의가 있습니다.",
+  MEETING_MINUTES_APPROVED: "회의록이 승인되었습니다.",
+  MEETING_POSTPROCESS_ATTENTION: "회의 처리에 확인이 필요합니다.",
+  CANDIDATE_MATERIALIZATION_FAILED: "AI 후보 생성에 실패했습니다.",
+  DOCUMENT_OWNERSHIP_TRANSFERRED: "문서 소유권이 이전되었습니다.",
+  DOCUMENT_PROCESSING_FAILED: "문서 처리에 확인이 필요합니다.",
+  FILE_SECURITY_BLOCKED: "파일이 보안 정책에 의해 차단되었습니다.",
+};
+export function presentationText(n: { presentationCode: string }): string {
+  return PRESENTATION_TEXT[n.presentationCode as NotificationType] ?? "새 알림이 있습니다.";
+}
+
+type Category = "업무" | "프로젝트" | "회의" | "문서";
+const CATEGORY_CLS: Record<Category, string> = { 업무: "bg-indigo-50 text-indigo-600", 프로젝트: "bg-emerald-50 text-emerald-600", 회의: "bg-violet-50 text-violet-600", 문서: "bg-amber-50 text-amber-600" };
+export function notificationCategory(t: NotificationType): Category {
+  if (t.startsWith("TASK_")) return "업무";
+  if (t === "PROJECT_MEMBER_ADDED" || t === "PROJECT_SCHEDULE_REMINDER") return "프로젝트";
+  if (t.startsWith("MEETING_") || t === "CANDIDATE_MATERIALIZATION_FAILED") return "회의";
+  return "문서";
+}
+export function CategoryBadge({ type }: { type: NotificationType }) {
+  const c = notificationCategory(type);
+  return <span className={`inline-flex items-center text-[10px] font-semibold tracking-wide px-2.5 py-0.5 rounded-full ${CATEGORY_CLS[c]}`}>{c}</span>;
+}
+
+export function fmtRelative(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60000) return "방금 전";
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}분 전`;
+  if (ms < 86400000) return `${Math.floor(ms / 3600000)}시간 전`;
+  return `${Math.floor(ms / 86400000)}일 전`;
+}
+
+export interface NotificationTarget { screen: string; ctx: Record<string, unknown> }
+// 알림 클릭 시 이동할 화면 — 실제 접근 권한은 항상 대상 화면 자신이 재검증한다(Notification != Authorization, §2 Core invariant).
+export function targetForNotification(n: NotificationResponse): NotificationTarget | null {
+  switch (n.resourceType) {
+    case "PROJECT": return { screen: "project-detail", ctx: { projectId: n.resourceId } };
+    case "TASK": return { screen: "tasks", ctx: {} };
+    case "MEETING": return { screen: "meeting-detail", ctx: { meetingId: n.resourceId } };
+    case "MEETING_MINUTES": return n.secondaryResourceId ? { screen: "meeting-detail", ctx: { meetingId: n.secondaryResourceId } } : null;
+    case "DOCUMENT": return { screen: "document-detail", ctx: { docId: n.resourceId } };
+    default: return null;
+  }
+}
+
+export interface NotificationCenter {
+  items: NotificationResponse[]; unreadCount: number; loading: boolean; error: string | null; hasMore: boolean;
+  loadMore: () => void; markRead: (id: string) => void; markAllRead: () => void; reload: () => void;
+}
+
+export function useNotificationCenter(myUserId?: string): NotificationCenter {
+  const [items, setItems] = useState<NotificationResponse[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const seenIds = useRef(new Set<string>());
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  async function fetchPage(cursor: string | null, replace: boolean) {
+    setLoading(true); setError(null);
+    try {
+      const page = await api.listNotifications({ limit: 20, cursor: cursor ?? undefined });
+      if (replace) seenIds.current = new Set();
+      const fresh = page.items.filter(n => !seenIds.current.has(n.notificationId));
+      fresh.forEach(n => seenIds.current.add(n.notificationId));
+      setItems(prev => replace ? page.items : [...prev, ...fresh]);
+      setNextCursor(page.page.nextCursor);
+      setHasMore(page.page.hasNext);
+    } catch (e) { setError(errorText(e)); }
+    finally { setLoading(false); }
+  }
+  async function refreshUnread() {
+    try { setUnreadCount((await api.getUnreadCount()).unreadCount); } catch { /* 배지 갱신 실패는 치명적이지 않으므로 조용히 무시 */ }
+  }
+
+  useEffect(() => {
+    if (!myUserId) return;
+    seenIds.current = new Set();
+    fetchPage(null, true);
+    refreshUnread();
+    const handle = api.streamNotifications(
+      e => {
+        if (seenIds.current.has(e.notificationId)) return;
+        seenIds.current.add(e.notificationId);
+        setItems(prev => [{ ...e, read: false, readAt: null }, ...prev]);
+        setUnreadCount(c => c + 1);
+      },
+      () => { /* 연결 실패는 재연결하지 않는다 — 화면 재진입/새로고침 시 자연히 다시 연결된다(데모 단순화) */ },
+    );
+    return () => handle.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myUserId]);
+
+  async function markRead(id: string) {
+    const target = itemsRef.current.find(n => n.notificationId === id);
+    if (!target || target.read) return;
+    setItems(prev => prev.map(n => n.notificationId === id ? { ...n, read: true, readAt: new Date().toISOString() } : n));
+    setUnreadCount(c => Math.max(0, c - 1));
+    try { await api.setNotificationReadState(id, true); } catch { /* 낙관적 갱신 유지, 다음 새로고침에서 서버 상태로 정정 */ }
+  }
+  async function markAllRead() {
+    setItems(prev => prev.map(n => ({ ...n, read: true, readAt: n.readAt ?? new Date().toISOString() })));
+    setUnreadCount(0);
+    try { await api.markAllNotificationsRead(); } catch { /* 위와 동일 */ }
+  }
+  function loadMore() { if (hasMore && !loading) fetchPage(nextCursor, false); }
+  function reload() { fetchPage(null, true); refreshUnread(); }
+
+  return { items, unreadCount, loading, error, hasMore, loadMore, markRead, markAllRead, reload };
+}
