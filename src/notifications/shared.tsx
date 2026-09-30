@@ -105,7 +105,9 @@ export function useNotificationCenter(myUserId?: string): NotificationCenter {
         setItems(prev => [{ ...e, read: false, readAt: null }, ...prev]);
         setUnreadCount(c => c + 1);
       },
-      () => { /* 연결 실패는 재연결하지 않는다 — 화면 재진입/새로고침 시 자연히 다시 연결된다(데모 단순화) */ },
+      () => { /* 재연결은 streamNotifications가 백오프로 처리한다. 인증 오류(401/403)일 때만 중단된다. */ },
+      // 서버는 끊긴 동안의 알림을 replay하지 않으므로 재연결 직후 목록과 unread-count를 다시 맞춘다.
+      () => { fetchPage(null, true); refreshUnread(); },
     );
     return () => handle.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps

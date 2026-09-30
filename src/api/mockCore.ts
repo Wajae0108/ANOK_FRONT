@@ -45,10 +45,10 @@ export const invalid = (...fe: FieldError[]) => fail(400, "VALIDATION_ERROR", fe
 export function check(errors: FieldError[]) { if (errors.length) invalid(...errors); }
 export function str(errors: FieldError[], b: any, field: string, min: number, max: number, required = true) {
   const v = b?.[field];
-  if (v === undefined || v === null || v === "") { if (required) errors.push({ field, reason: "REQUIRED" }); return undefined; }
+  if (v === undefined || v === null || v === "") { if (required) errors.push({ field, reason: "NotBlank" }); return undefined; }
   if (typeof v !== "string") { errors.push({ field, reason: "INVALID_FORMAT" }); return undefined; }
-  if (v.length < min) errors.push({ field, reason: "TOO_SHORT" });
-  if (v.length > max) errors.push({ field, reason: "TOO_LONG" });
+  // identity/project Service는 Bean Validation 코드(Size 등)를 fieldErrors[].reason에 그대로 내려준다.
+  if (v.length < min || v.length > max) errors.push({ field, reason: "Size" });
   return v;
 }
 export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

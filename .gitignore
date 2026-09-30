@@ -22,6 +22,9 @@ logs/
 
 # Claude Code local session/tool state — not project source.
 /.claude/
+/CLAUDE.md
+/AGENTS.md
+/.gitattributes
 
 # 백엔드 API 명세 참고용 문서 — 앱 소스 아님, 로컬 참고용으로만 보관.
 /MD참조/

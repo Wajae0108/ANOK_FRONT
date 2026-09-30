@@ -108,11 +108,12 @@ function ManageModal({ target, org, avatarUrl, onAvatar, onUpdated, onClose }: {
   const activeDepts = org.departments.filter(d => d.status === "ACTIVE");
   const deptTeams = org.teams.filter(t => t.status === "ACTIVE" && t.departmentId === departmentId);
 
-  async function act(name: string, fn: () => Promise<AdminUserResponse | { accepted: true }>, success: string) {
+  // 비밀번호 재설정 메일 발송은 data 없이 성공만 돌려준다(undefined).
+  async function act(name: string, fn: () => Promise<AdminUserResponse | undefined | void>, success: string) {
     setBusy(name); setMsg(null);
     try {
       const r = await fn();
-      if ("userId" in r) { setUser(r); onUpdated(r); }
+      if (r) { setUser(r); onUpdated(r); }
       setMsg({ ok: true, text: success });
     } catch (e) { setMsg({ ok: false, text: errorText(e) }); }
     finally { setBusy(null); }
@@ -152,18 +153,19 @@ function ManageModal({ target, org, avatarUrl, onAvatar, onUpdated, onClose }: {
       </div>
 
       <div className="space-y-3 pb-3 border-b border-slate-100">
-        <Field label="직무"><input value={jobTitle} onChange={e => setJobTitle(e.target.value)} className={inputCls} placeholder="예: 프론트엔드 개발자" /></Field>
+        <Field label="직무"><input value={jobTitle} onChange={e => setJobTitle(e.target.value)} maxLength={100} className={inputCls} placeholder="예: 프론트엔드 개발자" /></Field>
+        {user.jobTitle === undefined && <p className="text-[11px] text-amber-500">이 계정의 현재 직무는 조회할 수 없습니다. 소속을 저장하면 위에 입력한 직무로 덮어씁니다.</p>}
         <div className="grid grid-cols-2 gap-3">
           <Field label="부서">
             <select value={departmentId} onChange={e => { setDepartmentId(e.target.value); setTeamId(""); }} className={inputCls}>
               <option value="">미지정</option>
-              {activeDepts.map(d => <option key={d.departmentId} value={d.departmentId}>{d.name}</option>)}
+              {activeDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </Field>
           <Field label="팀">
             <select value={teamId} onChange={e => setTeamId(e.target.value)} disabled={!departmentId} className={inputCls}>
               <option value="">미지정</option>
-              {deptTeams.map(t => <option key={t.teamId} value={t.teamId}>{t.name}</option>)}
+              {deptTeams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </Field>
         </div>
@@ -229,8 +231,8 @@ function UsersTab({ org }: { org: Org }) {
     [offset, debouncedQ, status],
   );
 
-  const deptName = (id?: string | null) => org.departments.find(d => d.departmentId === id)?.name;
-  const teamName = (id?: string | null) => org.teams.find(t => t.teamId === id)?.name;
+  const deptName = (id?: string | null) => org.departments.find(d => d.id === id)?.name;
+  const teamName = (id?: string | null) => org.teams.find(t => t.id === id)?.name;
   const total = data?.page.total ?? 0;
 
   function replaceRow(u: AdminUserResponse) {
@@ -347,7 +349,7 @@ function OrgTab({ org, reload }: { org: Org; reload: () => void }) {
 
   const editor = (id: string, onSave: (name: string) => Promise<unknown>) => (
     <div className="flex items-center gap-2 flex-1">
-      <input autoFocus value={editing!.name} onChange={e => setEditing({ id, name: e.target.value })} maxLength={100}
+      <input autoFocus value={editing!.name} onChange={e => setEditing({ id, name: e.target.value })} maxLength={160}
         onKeyDown={e => { if (e.key === "Enter" && editing!.name.trim()) act(() => onSave(editing!.name.trim()), () => setEditing(null)); if (e.key === "Escape") setEditing(null); }}
         className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-[13px] outline-none focus:border-indigo-300" />
       <button disabled={busy || !editing!.name.trim()} onClick={() => act(() => onSave(editing!.name.trim()), () => setEditing(null))} className="text-[11px] text-indigo-500 font-semibold">저장</button>
@@ -361,7 +363,7 @@ function OrgTab({ org, reload }: { org: Org; reload: () => void }) {
   return (
     <div className="max-w-xl space-y-3">
       <div className="flex items-center gap-2">
-        <input value={newDept} onChange={e => setNewDept(e.target.value)} maxLength={100} placeholder="새 부서명" className={`${inputCls} flex-1`}
+        <input value={newDept} onChange={e => setNewDept(e.target.value)} maxLength={160} placeholder="새 부서명" className={`${inputCls} flex-1`}
           onKeyDown={e => e.key === "Enter" && newDept.trim() && act(() => api.createDepartment(newDept.trim()), () => setNewDept(""))} />
         <button disabled={busy || !newDept.trim()} onClick={() => act(() => api.createDepartment(newDept.trim()), () => setNewDept(""))} className={primaryBtn}>부서 추가</button>
       </div>
@@ -370,39 +372,39 @@ function OrgTab({ org, reload }: { org: Org; reload: () => void }) {
 
       {depts.length === 0 && <Card className="p-6 text-center text-[13px] text-slate-400">등록된 부서가 없습니다.</Card>}
       {depts.map(d => {
-        const dTeams = org.teams.filter(t => t.departmentId === d.departmentId && (showInactive || t.status === "ACTIVE"));
+        const dTeams = org.teams.filter(t => t.departmentId === d.id && (showInactive || t.status === "ACTIVE"));
         return (
-          <Card key={d.departmentId} className="p-4">
+          <Card key={d.id} className="p-4">
             <div className="flex items-center gap-2 mb-2">
-              {editing?.id === d.departmentId ? editor(d.departmentId, name => api.updateDepartment(d.departmentId, { name, version: d.version })) : (
+              {editing?.id === d.id ? editor(d.id, name => api.updateDepartment(d.id, { name, version: d.version })) : (
                 <p className={`text-[14px] font-bold flex-1 ${d.status === "ACTIVE" ? "text-slate-800" : "text-slate-400"}`}>{d.name}{d.status === "INACTIVE" && inactiveTag}</p>
               )}
-              {d.status === "ACTIVE" && editing?.id !== d.departmentId && (
+              {d.status === "ACTIVE" && editing?.id !== d.id && (
                 <>
-                  <button onClick={() => setEditing({ id: d.departmentId, name: d.name })} className="text-[11px] text-slate-400 hover:text-indigo-600 font-semibold">이름 변경</button>
-                  <button onClick={() => { setAddingTeamFor(d.departmentId); setNewTeam(""); }} className="text-[11px] text-indigo-500 font-semibold">팀 추가</button>
-                  {inactivateBtn(d.departmentId, () => api.inactivateDepartment(d.departmentId, d.version))}
+                  <button onClick={() => setEditing({ id: d.id, name: d.name })} className="text-[11px] text-slate-400 hover:text-indigo-600 font-semibold">이름 변경</button>
+                  <button onClick={() => { setAddingTeamFor(d.id); setNewTeam(""); }} className="text-[11px] text-indigo-500 font-semibold">팀 추가</button>
+                  {inactivateBtn(d.id, () => api.inactivateDepartment(d.id, d.version))}
                 </>
               )}
             </div>
-            {addingTeamFor === d.departmentId && (
+            {addingTeamFor === d.id && (
               <div className="flex items-center gap-2 mb-2">
-                <input autoFocus value={newTeam} onChange={e => setNewTeam(e.target.value)} maxLength={100} placeholder="새 팀명" className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-[13px] outline-none focus:border-indigo-300"
-                  onKeyDown={e => e.key === "Enter" && newTeam.trim() && act(() => api.createTeam({ departmentId: d.departmentId, name: newTeam.trim() }), () => setAddingTeamFor(null))} />
-                <button disabled={busy || !newTeam.trim()} onClick={() => act(() => api.createTeam({ departmentId: d.departmentId, name: newTeam.trim() }), () => setAddingTeamFor(null))} className="text-[11px] text-indigo-500 font-semibold">추가</button>
+                <input autoFocus value={newTeam} onChange={e => setNewTeam(e.target.value)} maxLength={160} placeholder="새 팀명" className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-[13px] outline-none focus:border-indigo-300"
+                  onKeyDown={e => e.key === "Enter" && newTeam.trim() && act(() => api.createTeam({ departmentId: d.id, name: newTeam.trim() }), () => setAddingTeamFor(null))} />
+                <button disabled={busy || !newTeam.trim()} onClick={() => act(() => api.createTeam({ departmentId: d.id, name: newTeam.trim() }), () => setAddingTeamFor(null))} className="text-[11px] text-indigo-500 font-semibold">추가</button>
                 <button onClick={() => setAddingTeamFor(null)} className="text-[11px] text-slate-400 font-semibold">취소</button>
               </div>
             )}
             {dTeams.length === 0 && <p className="text-[12px] text-slate-300 py-1">팀이 없습니다.</p>}
             {dTeams.map(t => (
-              <div key={t.teamId} className="flex items-center gap-2 py-2 border-t border-slate-50">
-                {editing?.id === t.teamId ? editor(t.teamId, name => api.updateTeam(t.teamId, { departmentId: t.departmentId, name, version: t.version })) : (
+              <div key={t.id} className="flex items-center gap-2 py-2 border-t border-slate-50">
+                {editing?.id === t.id ? editor(t.id, name => api.updateTeam(t.id, { departmentId: t.departmentId, name, version: t.version })) : (
                   <p className={`text-[13px] flex-1 ${t.status === "ACTIVE" ? "text-slate-700" : "text-slate-400"}`}>{t.name}{t.status === "INACTIVE" && inactiveTag}</p>
                 )}
-                {t.status === "ACTIVE" && editing?.id !== t.teamId && (
+                {t.status === "ACTIVE" && editing?.id !== t.id && (
                   <>
-                    <button onClick={() => setEditing({ id: t.teamId, name: t.name })} className="text-[11px] text-slate-400 hover:text-indigo-600 font-semibold">이름 변경</button>
-                    {inactivateBtn(t.teamId, () => api.inactivateTeam(t.teamId, t.version))}
+                    <button onClick={() => setEditing({ id: t.id, name: t.name })} className="text-[11px] text-slate-400 hover:text-indigo-600 font-semibold">이름 변경</button>
+                    {inactivateBtn(t.id, () => api.inactivateTeam(t.id, t.version))}
                   </>
                 )}
               </div>

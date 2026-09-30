@@ -75,8 +75,8 @@ function OverviewTab({ p, canManage, onChanged }: { p: ProjectResponse; canManag
         </div>
         {editing ? (
           <div className="space-y-3">
-            <Field label="프로젝트명" error={fields.name}><input value={name} onChange={e => setName(e.target.value)} maxLength={200} className={inputCls} /></Field>
-            <Field label="설명" error={fields.description}><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} className={inputCls} /></Field>
+            <Field label="프로젝트명" error={fields.name}><input value={name} onChange={e => setName(e.target.value)} maxLength={120} className={inputCls} /></Field>
+            <Field label="설명" error={fields.description}><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={4000} className={inputCls} /></Field>
             <div className="flex gap-2">
               <button onClick={() => setEditing(false)} className={`flex-1 ${ghostBtn}`}>취소</button>
               <button disabled={busy === "meta" || !name.trim()} onClick={() => act("meta", () => api.updateProject(p.projectId, { name: name.trim(), description: description.trim() || undefined, version: p.version }).then(r => { setEditing(false); return r; }), "저장했습니다.")} className={`flex-1 ${primaryBtn}`}>저장</button>
@@ -210,7 +210,7 @@ function MembersTab({ projectId, canManage, myUserId }: { projectId: string; can
         <div key={m.membershipId} className="flex items-center gap-3 px-5 py-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-semibold text-slate-800 truncate">{nameOf(m.userId)}{m.userId === myUserId && " (나)"}</p>
-            <p className="text-[11px] text-slate-400">{m.status === "SUSPENDED_BY_IDENTITY" ? "일시 정지됨" : m.status === "ACTIVE" ? "활성" : m.status}{m.identityAvailability === "UNAVAILABLE_MEMBER" && " · 계정 비활성"}</p>
+            <p className="text-[11px] text-slate-400">{m.status === "SUSPENDED_BY_IDENTITY" ? "일시 정지됨" : m.status === "ACTIVE" ? "활성" : m.status}{!m.identityAvailability && " · 계정 비활성"}</p>
           </div>
           {canManage ? (
             <select value={m.role} disabled={busyId === m.membershipId || m.status !== "ACTIVE"} onChange={e => changeRole(m, e.target.value as ProjectRole)}
@@ -272,7 +272,7 @@ function TaskModal({ projectId, task, canManage, myUserId, members, nameOf, onCl
     <Modal title={isNew ? "새 업무" : "업무 상세"} onClose={onClose}>
       {(!isNew && canManage) || isNew ? (
         <>
-          <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={200} disabled={!isNew && busy !== null} className={inputCls} /></Field>
+          <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={160} disabled={!isNew && busy !== null} className={inputCls} /></Field>
           <Field label="설명" error={fields.description}><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={4000} className={inputCls} /></Field>
         </>
       ) : (
@@ -296,7 +296,7 @@ function TaskModal({ projectId, task, canManage, myUserId, members, nameOf, onCl
         </>
       ) : task && (
         <>
-          <div className="flex items-center gap-2"><TaskStatusBadge status={task.status} />{task.assigneeAvailability === "UNAVAILABLE_ASSIGNEE" && <span className="text-[10px] text-rose-500 font-semibold">담당자 계정 비활성</span>}</div>
+          <div className="flex items-center gap-2"><TaskStatusBadge status={task.status} />{task.assigneeUserId && !task.assigneeAvailability && <span className="text-[10px] text-rose-500 font-semibold">담당자 계정 비활성</span>}</div>
 
           {canManage ? (
             <Field label="담당자">
@@ -417,8 +417,8 @@ function DecisionModal({ projectId, decision, onClose, onSaved, onCreated, onSup
           ))}
         </div>
       )}
-      <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={200} className={inputCls} /></Field>
-      <Field label="내용" error={fields.content}><textarea rows={4} value={content} onChange={e => setContent(e.target.value)} maxLength={4000} className={inputCls} /></Field>
+      <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={160} className={inputCls} /></Field>
+      <Field label="내용" error={fields.content}><textarea rows={4} value={content} onChange={e => setContent(e.target.value)} maxLength={10000} className={inputCls} /></Field>
       {mode === "supersede" && <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">기존 결정은 "대체됨"으로 표시되고, 이 내용으로 새 결정이 생성됩니다.</p>}
       {error && <p className="text-[12px] text-rose-500 font-medium">{error}</p>}
       <div className="flex gap-2">
@@ -475,7 +475,7 @@ function ScheduleModal({ projectId, item, onClose, onSaved, onCreated }: {
 
   async function submit() {
     setBusy(true); setError(null); setFields({});
-    const body = { type, title: title.trim(), description: description.trim() || undefined, startsAt: startsAt ? new Date(startsAt).toISOString() : undefined, endsAt: endsAt ? new Date(endsAt).toISOString() : undefined };
+    const body = { type, title: title.trim(), description: description.trim() || undefined, startsAt: new Date(startsAt).toISOString(), endsAt: endsAt ? new Date(endsAt).toISOString() : undefined };
     try {
       if (isNew) onCreated(await api.createScheduleItem(projectId, body));
       else onSaved(await api.updateScheduleItem(projectId, item.scheduleItemId, { ...body, version: item.version }));
@@ -496,17 +496,17 @@ function ScheduleModal({ projectId, item, onClose, onSaved, onCreated }: {
           {(["MILESTONE", "EVENT"] as const).map(t => <button key={t} onClick={() => setType(t)} className={`flex-1 py-2 rounded-xl text-[12px] font-bold border ${type === t ? "bg-indigo-500 text-white border-indigo-500" : "border-slate-200 text-slate-500"}`}>{t === "MILESTONE" ? "마일스톤" : "이벤트"}</button>)}
         </div>
       </Field>
-      <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={200} className={inputCls} /></Field>
+      <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={160} className={inputCls} /></Field>
       <Field label="설명 (선택)" error={fields.description}><textarea rows={2} value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} className={inputCls} /></Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="시작일 (선택)"><input type="date" value={startsAt} onChange={e => setStartsAt(e.target.value)} className={inputCls} /></Field>
-        <Field label="종료일 (선택)"><input type="date" value={endsAt} onChange={e => setEndsAt(e.target.value)} className={inputCls} /></Field>
+        <Field label="시작일" error={fields.startsAt}><input type="date" value={startsAt} onChange={e => setStartsAt(e.target.value)} className={inputCls} /></Field>
+        <Field label="종료일 (선택)" error={fields.endsAt}><input type="date" value={endsAt} onChange={e => setEndsAt(e.target.value)} className={inputCls} /></Field>
       </div>
       {error && <p className="text-[12px] text-rose-500 font-medium">{error}</p>}
       <div className="flex gap-2">
         {!isNew && item.status === "ACTIVE" && <button onClick={cancelItem} disabled={busy} className="px-4 py-2.5 border border-rose-200 text-rose-500 text-[13px] font-semibold rounded-xl hover:bg-rose-50 disabled:opacity-40">취소 처리</button>}
         <button onClick={onClose} className={`flex-1 ${ghostBtn}`}>닫기</button>
-        <button disabled={busy || !title.trim()} onClick={submit} className={`flex-1 ${primaryBtn}`}>{busy ? "저장 중..." : "저장"}</button>
+        <button disabled={busy || !title.trim() || !startsAt} onClick={submit} className={`flex-1 ${primaryBtn}`}>{busy ? "저장 중..." : "저장"}</button>
       </div>
     </Modal>
   );

@@ -33,7 +33,7 @@ interface Task {
 }
 interface ScheduleItem {
   scheduleItemId: string; projectId: string; type: ProjectScheduleType; title: string; description: string | null;
-  startsAt: string | null; endsAt: string | null; status: ProjectScheduleStatus;
+  startsAt: string; endsAt: string | null; status: ProjectScheduleStatus;
   createdByUserId: string; createdAt: string; updatedAt: string; canceledAt: string | null; version: number;
 }
 
@@ -180,7 +180,7 @@ function toMemberResponse(m: Membership): ProjectMemberResponse {
   return {
     membershipId: m.membershipId, projectId: m.projectId, userId: m.userId, role: m.role, status: m.status,
     joinedAt: m.joinedAt, suspendedAt: m.suspendedAt, restoredAt: m.restoredAt, removedAt: m.removedAt, version: m.version,
-    identityAvailability: identity && identity.status === "ACTIVE" ? "AVAILABLE" : "UNAVAILABLE_MEMBER",
+    identityAvailability: !!identity && identity.status === "ACTIVE",
   };
 }
 function toDecisionResponse(d: Decision): DecisionResponse {
@@ -190,7 +190,7 @@ function toTaskResponse(t: Task): TaskResponse {
   const identity = t.assigneeUserId ? byId(t.assigneeUserId) : undefined;
   return {
     taskId: t.taskId, projectId: t.projectId, title: t.title, description: t.description, status: t.status,
-    assigneeUserId: t.assigneeUserId, assigneeAvailability: !t.assigneeUserId || (identity && identity.status === "ACTIVE") ? "AVAILABLE" : "UNAVAILABLE_ASSIGNEE",
+    assigneeUserId: t.assigneeUserId, assigneeAvailability: !t.assigneeUserId || (!!identity && identity.status === "ACTIVE"),
     dueAt: t.dueAt, sourceType: t.sourceType, sourceMeetingId: t.sourceMeetingId, sourceCandidateId: t.sourceCandidateId, sourceDecisionId: t.sourceDecisionId,
     createdByUserId: t.createdByUserId, createdAt: t.createdAt, updatedAt: t.updatedAt, startedAt: t.startedAt, completedAt: t.completedAt, canceledAt: t.canceledAt, version: t.version,
   };
@@ -328,7 +328,7 @@ export function routeProject(o: RequestOptions, me: MockUser): unknown {
     if (row.status === "REMOVED") return fail(409, "MEMBERSHIP_ALREADY_REMOVED");
     if (row.role === "MANAGER" && activeManagerCount(p.projectId) <= 1) return fail(409, "LAST_ACTIVE_MANAGER");
     row.status = "REMOVED"; row.removedAt = now(); row.version++;
-    return undefined;
+    return toMemberResponse(row);
   }
 
   m = /^\/api\/projects\/([^/]+)\/members\/([^/]+)\/restore$/.exec(path);
@@ -348,9 +348,8 @@ export function routeProject(o: RequestOptions, me: MockUser): unknown {
   // ── Manager recovery (Admin, step-up — 게이트는 mock.ts가 "AUTH_BEARER_ADMIN_STEP_UP" 경로에서 이미 통과시켜 호출한다) ──
   if (key === "GET /api/admin/projects/manager-recovery") {
     const rows: ManagerRecoveryProjectSummary[] = projects
-      .filter(p => !q.status || p.status === q.status)
       .filter(p => activeManagerCount(p.projectId) === 0)
-      .map(p => ({ projectId: p.projectId, name: p.name, status: p.status, activeManagerCount: 0, recoveryRequiredSince: p.updatedAt }));
+      .map(p => ({ projectId: p.projectId, name: p.name, status: p.status, activeManagerCount: 0 }));
     return offsetPage(rows, q);
   }
   m = /^\/api\/admin\/projects\/([^/]+)\/manager-recovery$/.exec(path);
@@ -371,7 +370,7 @@ export function routeProject(o: RequestOptions, me: MockUser): unknown {
       row = mkMembership(p.projectId, b.targetUserId, "MANAGER");
       memberships.push(row);
     }
-    return toMemberResponse(row);
+    return { projectId: p.projectId, name: p.name, status: p.status, activeManagerCount: activeManagerCount(p.projectId) };
   }
 
   // ── Decisions ──
@@ -426,15 +425,12 @@ export function routeProject(o: RequestOptions, me: MockUser): unknown {
   if (m) {
     const p = project(m[1]);
     if (o.method === "GET") {
-      const membership = requireMember(p, me);
-      if (q.assigneeUserId && membership.role !== "MANAGER") return fail(403, "TASK_FILTER_FORBIDDEN");
+      requireMember(p, me);
       let rows = tasks.filter(t => t.projectId === p.projectId);
       if (q.status) rows = rows.filter(t => t.status === q.status);
-      if (q.assignee === "me") rows = rows.filter(t => t.assigneeUserId === me.userId);
-      else if (q.assignee === "unassigned") rows = rows.filter(t => !t.assigneeUserId);
-      else if (q.assigneeUserId) rows = rows.filter(t => t.assigneeUserId === q.assigneeUserId);
-      if (q.dueFrom) rows = rows.filter(t => t.dueAt && t.dueAt >= String(q.dueFrom));
-      if (q.dueTo) rows = rows.filter(t => t.dueAt && t.dueAt <= String(q.dueTo));
+      if (q.assigneeUserId) rows = rows.filter(t => t.assigneeUserId === q.assigneeUserId);
+      if (q.dueAfter) rows = rows.filter(t => t.dueAt && t.dueAt >= String(q.dueAfter));
+      if (q.dueBefore) rows = rows.filter(t => t.dueAt && t.dueAt <= String(q.dueBefore));
       rows = rows.sort((a, b2) => b2.createdAt.localeCompare(a.createdAt));
       const page = offsetPage(rows, q);
       return { items: page.items.map(toTaskResponse), page: page.page };
@@ -542,9 +538,9 @@ export function routeProject(o: RequestOptions, me: MockUser): unknown {
       let rows = scheduleItems.filter(s => s.projectId === p.projectId);
       if (q.status) rows = rows.filter(s => s.status === q.status);
       if (q.type) rows = rows.filter(s => s.type === q.type);
-      if (q.from) rows = rows.filter(s => !s.startsAt || s.startsAt >= String(q.from));
-      if (q.to) rows = rows.filter(s => !s.startsAt || s.startsAt <= String(q.to));
-      rows = rows.sort((a, b2) => (a.startsAt ?? "").localeCompare(b2.startsAt ?? ""));
+      if (q.startsAfter) rows = rows.filter(s => s.startsAt >= String(q.startsAfter));
+      if (q.startsBefore) rows = rows.filter(s => s.startsAt <= String(q.startsBefore));
+      rows = rows.sort((a, b2) => a.startsAt.localeCompare(b2.startsAt));
       const page = offsetPage(rows, q);
       return { items: page.items.map(toScheduleResponse), page: page.page };
     }
@@ -552,8 +548,10 @@ export function routeProject(o: RequestOptions, me: MockUser): unknown {
     if (p.status !== "ACTIVE") return fail(409, "PROJECT_NOT_ACTIVE");
     const e: FieldError[] = [];
     if (!["MILESTONE", "EVENT"].includes(b.type)) e.push({ field: "type", reason: "INVALID_ENUM" });
-    const title = str(e, b, "title", 1, 200); const description = str(e, b, "description", 0, 2000, false); check(e);
-    const row = mkSchedule(p.projectId, b.type, title!, b.startsAt ?? null, me.userId);
+    const title = str(e, b, "title", 1, 160); const description = str(e, b, "description", 0, 2000, false);
+    if (!b.startsAt) e.push({ field: "startsAt", reason: "NotNull" });
+    check(e);
+    const row = mkSchedule(p.projectId, b.type, title!, b.startsAt, me.userId);
     row.description = description ?? null; row.endsAt = b.endsAt ?? null;
     scheduleItems.push(row);
     return toScheduleResponse(row);
@@ -570,9 +568,11 @@ export function routeProject(o: RequestOptions, me: MockUser): unknown {
     if (target.status === "CANCELED") return fail(409, "SCHEDULE_ITEM_CANCELED");
     const e: FieldError[] = [];
     if (!["MILESTONE", "EVENT"].includes(b.type)) e.push({ field: "type", reason: "INVALID_ENUM" });
-    const title = str(e, b, "title", 1, 200); const description = str(e, b, "description", 0, 2000, false); check(e);
+    const title = str(e, b, "title", 1, 160); const description = str(e, b, "description", 0, 2000, false);
+    if (!b.startsAt) e.push({ field: "startsAt", reason: "NotNull" });
+    check(e);
     const row = versioned(target, b, "SCHEDULE_ITEM_NOT_FOUND");
-    Object.assign(row, { type: b.type, title, description: description ?? null, startsAt: b.startsAt ?? null, endsAt: b.endsAt ?? null, version: row.version + 1, updatedAt: now() });
+    Object.assign(row, { type: b.type, title, description: description ?? null, startsAt: b.startsAt, endsAt: b.endsAt ?? null, version: row.version + 1, updatedAt: now() });
     return toScheduleResponse(row);
   }
 

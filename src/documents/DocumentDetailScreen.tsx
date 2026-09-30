@@ -45,8 +45,8 @@ function OverviewTab({ doc, onChanged }: { doc: DocumentResponse; onChanged: (d:
         </div>
         {editing ? (
           <div className="space-y-3">
-            <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={200} className={inputCls} /></Field>
-            <Field label="설명" error={fields.description}><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} className={inputCls} /></Field>
+            <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={160} className={inputCls} /></Field>
+            <Field label="설명" error={fields.description}><textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={4000} className={inputCls} /></Field>
             <Field label="민감도 분류" error={fields.sensitivityClassification}>
               <select value={sensitivity} onChange={e => setSensitivity(e.target.value as SensitivityClassification)} disabled={!isOwner} className={inputCls}>
                 {SENSITIVITY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}

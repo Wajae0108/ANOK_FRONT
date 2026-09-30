@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { completeStepUp, createStepUpChallenge } from "../api/identity";
-import type { FactorType } from "../api/identity";
 import { errorText } from "../api/errors";
 import { tokenStore } from "../api/tokenStore";
 import { USE_MOCK } from "../api/config";
@@ -9,7 +8,6 @@ import { MOCK_PASSWORD, MOCK_TOTP } from "../api/mock";
 // API-09/10: 사용자 상태·회사 권한 변경 같은 고위험 ADMIN 작업 직전 비밀번호 + MFA로 재인증한다.
 export default function StepUpModal({ onDone }: { onDone: (ok: boolean) => void }) {
   const [password, setPassword] = useState("");
-  const [factorType, setFactorType] = useState<FactorType>("TOTP");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +17,7 @@ export default function StepUpModal({ onDone }: { onDone: (ok: boolean) => void 
     setError(null);
     try {
       const ch = await createStepUpChallenge();
-      const res = await completeStepUp({ challengeToken: ch.challengeToken, password, factorType, factorCode: code.trim() });
+      const res = await completeStepUp({ challengeToken: ch.challengeToken, password, code: code.trim() });
       tokenStore.set(res.accessToken);
       onDone(true);
     } catch (e) {
@@ -41,16 +39,9 @@ export default function StepUpModal({ onDone }: { onDone: (ok: boolean) => void 
             className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-[13px] outline-none focus:border-indigo-300" />
         </div>
         <div>
-          <div className="flex gap-2 mb-2">
-            {(["TOTP", "RECOVERY_CODE"] as const).map(t => (
-              <button key={t} type="button" onClick={() => setFactorType(t)}
-                className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold border ${factorType === t ? "bg-indigo-500 text-white border-indigo-500" : "border-slate-200 text-slate-500"}`}>
-                {t === "TOTP" ? "인증 앱 코드" : "복구 코드"}
-              </button>
-            ))}
-          </div>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block mb-1">인증 코드 또는 복구 코드</label>
           <input value={code} onChange={e => setCode(e.target.value)} autoComplete="one-time-code" inputMode="text"
-            placeholder={factorType === "TOTP" ? "6자리 코드" : "복구 코드"}
+            placeholder="6자리 코드 또는 복구 코드"
             className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-[13px] outline-none focus:border-indigo-300" />
         </div>
         {USE_MOCK && <p className="text-[10px] text-slate-400">mock: 비밀번호 {MOCK_PASSWORD} / 코드 {MOCK_TOTP}</p>}

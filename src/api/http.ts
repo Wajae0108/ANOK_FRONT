@@ -84,7 +84,8 @@ async function execute<T>(opts: RequestOptions, idemKey: string | undefined, ref
       handlers.onExpired?.();
       throw err;
     }
-    if (res.status === 403 && err.errorCode === "STEP_UP_REQUIRED" && !steppedUp && handlers.onStepUp) {
+    // Identity/Project/Meeting/AI는 STEP_UP_REQUIRED, Document Service는 MFA_STEP_UP_REQUIRED를 돌려준다.
+    if (res.status === 403 && (err.errorCode === "STEP_UP_REQUIRED" || err.errorCode === "MFA_STEP_UP_REQUIRED") && !steppedUp && handlers.onStepUp) {
       if (await handlers.onStepUp()) return execute<T>(opts, idemKey, refreshed, true);
     }
   }
@@ -123,22 +124,36 @@ export async function downloadFile(path: string, refreshed = false): Promise<{ b
   return { blob: await res.blob(), filename: parseFilename(res.headers.get("Content-Disposition")) };
 }
 
+// 스트림 연결 시점에 Access Token이 만료돼 401이면 refresh 후 1회 재시도한다. 갱신도 실패하면 세션 만료로 처리한다.
+async function retryStreamOnce(res: Response, refreshed: boolean, retry: () => Promise<Response>): Promise<Response> {
+  if (res.status !== 401 || refreshed) return res;
+  let ok = false;
+  try { ok = await refreshSession(); } catch { return res; }
+  if (ok) return retry();
+  handlers.onExpired?.();
+  return res;
+}
+
 // SSE 라우트: 공통 JSON Wrapper 없이 text/event-stream 바디를 그대로 반환한다(query token 금지, Bearer 헤더만 사용).
-export async function openStream(path: string, signal?: AbortSignal): Promise<Response> {
+// 호출 측은 res.ok를 확인해야 한다 — 실패 시 바디는 SSE가 아니라 공통 실패 JSON이다.
+export async function openStream(path: string, signal?: AbortSignal, refreshed = false): Promise<Response> {
   const token = tokenStore.get();
   const headers: Record<string, string> = { Accept: "text/event-stream" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  return USE_MOCK ? mockStream(path, headers, signal) : fetch(API_BASE_URL + path, { headers, signal });
+  const res = USE_MOCK ? await mockStream(path, headers, signal) : await fetch(API_BASE_URL + path, { headers, signal });
+  return retryStreamOnce(res, refreshed, () => openStream(path, signal, true));
 }
 
 // AI-API-05 전용: POST 본문 + Idempotency-Key를 실어 SSE 스트림을 연다(공통 JSON Wrapper 없음).
-export async function openMessageStream(path: string, body: unknown, idemKey: string, signal?: AbortSignal): Promise<Response> {
+export async function openMessageStream(path: string, body: unknown, idemKey: string, signal?: AbortSignal, refreshed = false): Promise<Response> {
   const token = tokenStore.get();
   const headers: Record<string, string> = { Accept: "text/event-stream", "Content-Type": "application/json", "Idempotency-Key": idemKey };
   if (token) headers.Authorization = `Bearer ${token}`;
-  return USE_MOCK
-    ? mockStream(path, headers, signal, body)
-    : fetch(API_BASE_URL + path, { method: "POST", headers, body: JSON.stringify(body), signal });
+  const res = USE_MOCK
+    ? await mockStream(path, headers, signal, body)
+    : await fetch(API_BASE_URL + path, { method: "POST", headers, body: JSON.stringify(body), signal });
+  // 같은 Idempotency-Key로 재시도하므로 서버가 이미 접수했더라도 중복 실행되지 않는다.
+  return retryStreamOnce(res, refreshed, () => openMessageStream(path, body, idemKey, signal, true));
 }
 
 let refreshing: Promise<boolean> | null = null;

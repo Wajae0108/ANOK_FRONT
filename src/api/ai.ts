@@ -47,8 +47,9 @@ export const createConversation = (b: { scopeType: ConversationScopeType; scopeR
   request<ConversationSummaryResponse>({ method: "POST", path: "/api/ai/conversations", body: b, ...auth, idempotent: true });
 export const getConversation = (conversationId: Uuid) =>
   request<ConversationDetailResponse>({ method: "GET", path: `/api/ai/conversations/${conversationId}`, ...auth });
+// Gateway 라우트가 CT_NONE이라 본문을 보내면 415다(빈 `{}` 포함).
 export const closeConversation = (conversationId: Uuid) =>
-  request<ConversationSummaryResponse>({ method: "POST", path: `/api/ai/conversations/${conversationId}/close`, body: {}, ...auth, idempotent: true });
+  request<ConversationSummaryResponse>({ method: "POST", path: `/api/ai/conversations/${conversationId}/close`, ...auth, idempotent: true });
 export const listAvailableModels = () => request<AvailableGenerationModelsResponse>({ method: "GET", path: "/api/ai/models", ...auth });
 
 export const getCompanyAiSettings = () => request<CompanyAiSettingsResponse>({ method: "GET", path: "/api/admin/ai/settings", ...auth });

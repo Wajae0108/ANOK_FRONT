@@ -1,8 +1,8 @@
 // Documents 화면들이 공유하는 배지/포맷 유틸.
 import type { AclPermission, DocumentProcessingStatus, DocumentStatus, EffectivePermission, SensitivityClassification } from "../api/document";
 
-const PERM_LABEL: Record<EffectivePermission, string> = { OWNER: "소유자", EDITOR: "편집자", VIEWER: "열람자" };
-const PERM_CLS: Record<EffectivePermission, string> = { OWNER: "bg-indigo-100 text-indigo-700", EDITOR: "bg-amber-50 text-amber-600", VIEWER: "bg-slate-50 text-slate-400" };
+const PERM_LABEL: Record<EffectivePermission, string> = { OWNER: "소유자", EDITOR: "편집자", VIEWER: "열람자", NONE: "권한 없음" };
+const PERM_CLS: Record<EffectivePermission, string> = { OWNER: "bg-indigo-100 text-indigo-700", EDITOR: "bg-amber-50 text-amber-600", VIEWER: "bg-slate-50 text-slate-400", NONE: "bg-rose-50 text-rose-500" };
 export function PermissionBadge({ permission }: { permission: EffectivePermission }) {
   return <span className={`inline-flex text-[10px] font-bold px-2 py-0.5 rounded ${PERM_CLS[permission]}`}>{PERM_LABEL[permission]}</span>;
 }

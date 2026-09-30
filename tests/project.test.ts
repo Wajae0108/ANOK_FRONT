@@ -50,7 +50,7 @@ describe("Project(02) 시나리오", () => {
     await loginAdmin("insung@anok.io");
     ok("recovery list needs step-up", (await code(prj.listManagerRecoveryProjects())) === "403 STEP_UP_REQUIRED");
     const ch = await idn.createStepUpChallenge();
-    const su = await idn.completeStepUp({ challengeToken: ch.challengeToken, password: "AnokDemo!2026", factorType: "TOTP", factorCode: "123456" });
+    const su = await idn.completeStepUp({ challengeToken: ch.challengeToken, password: "AnokDemo!2026", code: "123456" });
     tokenStore.set(su.accessToken);
     const recovery = await prj.listManagerRecoveryProjects();
     ok("no project currently needs recovery", recovery.items.every((p: any) => p.name !== "테스트 프로젝트"));
@@ -79,7 +79,8 @@ describe("Project(02) 시나리오", () => {
     ok("manager can filter by assigneeUserId", !!inProgressTask);
 
     await loginAs("gyuchan@anok.io");
-    ok("MEMBER cannot filter by assigneeUserId", (await code(prj.listTasks(proj2.projectId, { assigneeUserId: dayoungId }))) === "403 TASK_FILTER_FORBIDDEN");
+    // 실제 project_service의 TaskService.list는 assigneeUserId 필터를 역할과 무관하게 허용한다(TASK_FILTER_FORBIDDEN은 정의만 있고 던지지 않는다).
+    ok("MEMBER도 assigneeUserId로 필터링 가능(서버 미제한)", (await code(prj.listTasks(proj2.projectId, { assigneeUserId: dayoungId }))) === "OK");
 
     await loginAs("dayoung@anok.io"); // MEMBER, assignee of inProgressTask
     ok("assignee (MEMBER) can move IN_PROGRESS -> DONE", (await prj.updateTaskStatus(proj2.projectId, inProgressTask.taskId, { status: "DONE", version: inProgressTask.version })).status === "DONE");

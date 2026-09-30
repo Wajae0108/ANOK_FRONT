@@ -5,6 +5,7 @@ import {
 } from "../api/identity";
 import type { MfaEnrollmentSecretResponse } from "../api/identity";
 import { ApiError, errorText, fieldErrorMap } from "../api/errors";
+import QrCode from "../ui/QrCode";
 import { useAuth } from "./AuthProvider";
 
 type Tab = "프로필" | "비밀번호" | "MFA";
@@ -21,7 +22,8 @@ function Field({ label, error, children }: { label: string; error?: string; chil
   );
 }
 
-// API-17~24: 내 프로필/비밀번호/MFA. 백엔드 응답이 `version`을 주지 않으면 프로필 수정은 서버 계약과 맞지 않는다(명세 확인 필요).
+// API-17~24: 내 프로필/비밀번호/MFA. 서버의 UpdateMeRequest는 displayName·jobTitle만 받고(fullName·version 없음),
+// MFA 해제는 currentPassword가 아니라 password + code(TOTP 또는 복구 코드)를 요구한다.
 export default function MyAccountModal({ onClose }: { onClose: () => void }) {
   const { me, reloadMe } = useAuth();
   const [tab, setTab] = useState<Tab>("프로필");
@@ -30,13 +32,13 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
   const [ok, setOk] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
 
-  const [profile, setProfile] = useState({ fullName: me?.fullName ?? "", displayName: me?.displayName ?? "", jobTitle: me?.jobTitle ?? "" });
+  const [profile, setProfile] = useState({ displayName: me?.displayName ?? "", jobTitle: me?.jobTitle ?? "" });
   const [pw, setPw] = useState({ current: "", next: "" });
   const [mfaPw, setMfaPw] = useState("");
   const [secret, setSecret] = useState<MfaEnrollmentSecretResponse | null>(null);
   const [totp, setTotp] = useState("");
   const [codes, setCodes] = useState<string[] | null>(null);
-  const [reason, setReason] = useState("");
+  const [disableCode, setDisableCode] = useState("");
 
   if (!me) return null;
 
@@ -50,7 +52,7 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
   }
 
   const saveProfile = () => run(async () => {
-    await updateMe({ fullName: profile.fullName.trim(), displayName: profile.displayName.trim(), jobTitle: profile.jobTitle.trim() || null, version: me.version ?? 0 });
+    await updateMe({ displayName: profile.displayName.trim(), jobTitle: profile.jobTitle.trim() || null });
     await reloadMe();
   }, "프로필을 저장했습니다.");
 
@@ -61,14 +63,14 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
 
   const startEnroll = () => run(async () => { setSecret(await startMfaEnrollment(mfaPw)); setMfaPw(""); });
   const confirmEnroll = () => run(async () => {
-    const r = await confirmMfaEnrollment({ enrollmentId: secret!.enrollmentId, totpCode: totp.trim() });
+    const r = await confirmMfaEnrollment(totp.trim());
     setCodes(r.recoveryCodes); setSecret(null); setTotp("");
     await reloadMe();
   });
   const rotate = () => run(async () => { setCodes((await rotateRecoveryCodes()).recoveryCodes); });
   const disable = () => run(async () => {
-    await disableMfa({ currentPassword: mfaPw, reason: reason.trim() || undefined });
-    setMfaPw(""); setReason(""); await reloadMe();
+    await disableMfa({ password: mfaPw, code: disableCode.trim() });
+    setMfaPw(""); setDisableCode(""); await reloadMe();
   }, "MFA를 해제했습니다.");
 
   return (
@@ -93,11 +95,10 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
         <div className="p-5 space-y-4">
           {tab === "프로필" && (
             <>
-              <Field label="이름" error={fields.fullName}><input value={profile.fullName} onChange={e => setProfile(p => ({ ...p, fullName: e.target.value }))} className={inputCls} /></Field>
               <Field label="표시 이름" error={fields.displayName}><input value={profile.displayName} onChange={e => setProfile(p => ({ ...p, displayName: e.target.value }))} className={inputCls} /></Field>
               <Field label="직무" error={fields.jobTitle}><input value={profile.jobTitle} onChange={e => setProfile(p => ({ ...p, jobTitle: e.target.value }))} className={inputCls} /></Field>
               <p className="text-[11px] text-slate-400">소속 부서/팀은 회사 관리자가 변경합니다.</p>
-              <button onClick={saveProfile} disabled={busy || !profile.fullName.trim() || !profile.displayName.trim()} className={btnCls}>{busy ? "저장 중..." : "저장"}</button>
+              <button onClick={saveProfile} disabled={busy || !profile.displayName.trim()} className={btnCls}>{busy ? "저장 중..." : "저장"}</button>
             </>
           )}
 
@@ -111,7 +112,7 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
 
           {tab === "MFA" && (
             <>
-              <p className="text-[13px] font-semibold text-slate-800">2단계 인증: <span className={me.mfa.enabled ? "text-emerald-600" : "text-slate-400"}>{me.mfa.enabled ? "사용 중" : "사용 안 함"}</span></p>
+              <p className="text-[13px] font-semibold text-slate-800">2단계 인증: <span className={me.mfaEnabled ? "text-emerald-600" : "text-slate-400"}>{me.mfaEnabled ? "사용 중" : "사용 안 함"}</span></p>
 
               {codes && (
                 <div className="space-y-2">
@@ -123,7 +124,7 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
                 </div>
               )}
 
-              {!me.mfa.enabled && !secret && !codes && (
+              {!me.mfaEnabled && !secret && !codes && (
                 <>
                   <Field label="현재 비밀번호" error={fields.currentPassword}><input type="password" value={mfaPw} onChange={e => setMfaPw(e.target.value)} className={inputCls} /></Field>
                   <button onClick={startEnroll} disabled={busy || !mfaPw} className={btnCls}>MFA 설정 시작</button>
@@ -131,25 +132,27 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
               )}
               {secret && (
                 <>
+                  <p className="text-[12px] text-slate-400">인증 앱으로 QR 코드를 스캔한 뒤 6자리 코드를 입력해 주세요.</p>
+                  <QrCode value={secret.otpAuthUri} />
                   <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">수동 입력 키</p>
-                    <p className="text-[13px] font-mono font-bold text-slate-800 break-all select-all">{secret.manualKey}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">QR이 안 될 때 수동 입력 키</p>
+                    <p className="text-[13px] font-mono font-bold text-slate-800 break-all select-all">{secret.secret}</p>
                   </div>
-                  <Field label="인증 코드" error={fields.totpCode}><input value={totp} onChange={e => setTotp(e.target.value)} autoComplete="one-time-code" className={inputCls} placeholder="6자리 코드" /></Field>
+                  <Field label="인증 코드" error={fields.code}><input value={totp} onChange={e => setTotp(e.target.value)} autoComplete="one-time-code" className={inputCls} placeholder="6자리 코드" /></Field>
                   <button onClick={confirmEnroll} disabled={busy || !totp.trim()} className={btnCls}>설정 완료</button>
                 </>
               )}
 
-              {me.mfa.enabled && !codes && (
+              {me.mfaEnabled && !codes && (
                 <div className="space-y-3">
                   <button onClick={rotate} disabled={busy} className="px-4 py-2.5 border border-slate-200 text-slate-600 text-[13px] font-semibold rounded-xl hover:bg-slate-50 disabled:opacity-40">복구 코드 재발급</button>
                   {me.companyRole === "ADMIN" ? (
                     <p className="text-[11px] text-slate-400">관리자 계정은 MFA를 해제할 수 없습니다.</p>
                   ) : (
                     <div className="space-y-2 pt-2 border-t border-slate-100">
-                      <Field label="현재 비밀번호" error={fields.currentPassword}><input type="password" value={mfaPw} onChange={e => setMfaPw(e.target.value)} className={inputCls} /></Field>
-                      <Field label="해제 사유 (선택)" error={fields.reason}><input value={reason} onChange={e => setReason(e.target.value)} className={inputCls} /></Field>
-                      <button onClick={disable} disabled={busy || !mfaPw} className="px-4 py-2.5 border border-rose-200 text-rose-500 text-[13px] font-semibold rounded-xl hover:bg-rose-50 disabled:opacity-40">MFA 해제</button>
+                      <Field label="현재 비밀번호" error={fields.password}><input type="password" value={mfaPw} onChange={e => setMfaPw(e.target.value)} className={inputCls} /></Field>
+                      <Field label="인증 코드 또는 복구 코드" error={fields.code}><input value={disableCode} onChange={e => setDisableCode(e.target.value)} autoComplete="one-time-code" className={inputCls} /></Field>
+                      <button onClick={disable} disabled={busy || !mfaPw || !disableCode.trim()} className="px-4 py-2.5 border border-rose-200 text-rose-500 text-[13px] font-semibold rounded-xl hover:bg-rose-50 disabled:opacity-40">MFA 해제</button>
                     </div>
                   )}
                 </div>

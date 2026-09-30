@@ -77,7 +77,7 @@ describe("Document(03) 시나리오", () => {
     // seoyeon: 같은 프로젝트 MEMBER, 이 문서엔 explicit ACL 없음 → project-inherited VIEWER
     await loginSmart("seoyeon@anok.io");
     const viaInherited = await doc.getDocument(created.documentId);
-    ok("프로젝트 상속 VIEWER", viaInherited.effectivePermission === "VIEWER" && viaInherited.permissionSource === "PROJECT_INHERITED");
+    ok("프로젝트 상속 VIEWER", viaInherited.effectivePermission === "VIEWER" && viaInherited.permissionSource === "INHERITED");
 
     // dayoung: 이 프로젝트 멤버 아님 → 접근 거부
     await loginSmart("dayoung@anok.io");

@@ -1,4 +1,4 @@
-// 백엔드가 없을 때(VITE_API_BASE_URL 미설정) 01 명세와 같은 규칙으로 응답하는 인메모리 서버.
+// 백엔드가 없을 때(VITE_API_BASE_URL 미설정) ANOK_BACKEND identity_service의 실제 DTO/규칙으로 응답하는 인메모리 서버.
 // 실 API 연결 시 이 파일은 사용되지 않는다(config.USE_MOCK === false).
 import { ApiError } from "./errors";
 import type { RequestOptions } from "./http";
@@ -29,18 +29,18 @@ const SESSION_KEY = "anok_mock_session";
 const ACCESS_TTL_MS = 10 * 60 * 1000;
 
 const departments: DepartmentResponse[] = [
-  { departmentId: DEPT.dev, name: "개발부", status: "ACTIVE", version: 1 },
-  { departmentId: DEPT.tech, name: "기술부", status: "ACTIVE", version: 1 },
-  { departmentId: DEPT.product, name: "프로덕트부", status: "ACTIVE", version: 1 },
+  { id: DEPT.dev, name: "개발부", status: "ACTIVE", version: 1 },
+  { id: DEPT.tech, name: "기술부", status: "ACTIVE", version: 1 },
+  { id: DEPT.product, name: "프로덕트부", status: "ACTIVE", version: 1 },
 ];
 const teams: TeamResponse[] = [
-  { teamId: TEAM.be, departmentId: DEPT.dev, name: "백엔드팀", status: "ACTIVE", version: 1 },
-  { teamId: TEAM.fe, departmentId: DEPT.dev, name: "프론트엔드팀", status: "ACTIVE", version: 1 },
-  { teamId: TEAM.data, departmentId: DEPT.tech, name: "데이터팀", status: "ACTIVE", version: 1 },
-  { teamId: TEAM.ai, departmentId: DEPT.tech, name: "AI팀", status: "ACTIVE", version: 1 },
-  { teamId: TEAM.infra, departmentId: DEPT.tech, name: "인프라팀", status: "ACTIVE", version: 1 },
-  { teamId: TEAM.plan, departmentId: DEPT.product, name: "기획팀", status: "ACTIVE", version: 1 },
-  { teamId: TEAM.design, departmentId: DEPT.product, name: "디자인팀", status: "ACTIVE", version: 1 },
+  { id: TEAM.be, departmentId: DEPT.dev, name: "백엔드팀", status: "ACTIVE", version: 1 },
+  { id: TEAM.fe, departmentId: DEPT.dev, name: "프론트엔드팀", status: "ACTIVE", version: 1 },
+  { id: TEAM.data, departmentId: DEPT.tech, name: "데이터팀", status: "ACTIVE", version: 1 },
+  { id: TEAM.ai, departmentId: DEPT.tech, name: "AI팀", status: "ACTIVE", version: 1 },
+  { id: TEAM.infra, departmentId: DEPT.tech, name: "인프라팀", status: "ACTIVE", version: 1 },
+  { id: TEAM.plan, departmentId: DEPT.product, name: "기획팀", status: "ACTIVE", version: 1 },
+  { id: TEAM.design, departmentId: DEPT.product, name: "디자인팀", status: "ACTIVE", version: 1 },
 ];
 
 const company = {
@@ -49,32 +49,29 @@ const company = {
 };
 const invitations = new Map<string, InvitationResponse>();
 
-const toMe = (x: MockUser): CurrentUserResponse => {
-  const d = departments.find(v => v.departmentId === x.departmentId);
-  const t = teams.find(v => v.teamId === x.teamId);
-  return {
-    userId: x.userId, email: x.email, fullName: x.fullName, displayName: x.displayName, jobTitle: x.jobTitle, companyRole: x.companyRole, status: x.status,
-    company: { id: company.companyId, displayName: company.displayName, status: "ACTIVE" },
-    department: d ? { id: d.departmentId, name: d.name } : null, team: t ? { id: t.teamId, name: t.name } : null,
-    mfa: { enabled: x.mfa }, version: x.version,
-  };
-};
+const CREATED_AT = "2026-01-01T00:00:00Z";
+const toMe = (x: MockUser): CurrentUserResponse => ({
+  userId: x.userId, companyId: company.companyId, email: x.email, displayName: x.displayName, jobTitle: x.jobTitle, companyRole: x.companyRole, status: x.status,
+  departmentId: x.departmentId, teamId: x.teamId, mfaEnabled: x.mfa, createdAt: CREATED_AT, updatedAt: CREATED_AT, version: x.version,
+});
+// AdminUserSummary: fullName/jobTitle이 없다.
 const toAdmin = (x: MockUser): AdminUserResponse => ({
-  userId: x.userId, email: x.email, fullName: x.fullName, displayName: x.displayName, jobTitle: x.jobTitle, companyRole: x.companyRole,
-  status: x.status, departmentId: x.departmentId, teamId: x.teamId, version: x.version,
+  userId: x.userId, email: x.email, displayName: x.displayName, companyRole: x.companyRole,
+  status: x.status, departmentId: x.departmentId, teamId: x.teamId, createdAt: CREATED_AT, version: x.version,
 });
 
 const newToken = (x: MockUser) => `mock.${x.userId}.${Date.now() + ACCESS_TTL_MS}`;
 const session = (x: MockUser) => {
   sessionStorage.setItem(SESSION_KEY, x.userId);
-  return { accessToken: newToken(x), tokenType: "Bearer" as const, expiresAt: new Date(Date.now() + ACCESS_TTL_MS).toISOString() };
+  return { accessToken: newToken(x), expiresIn: ACCESS_TTL_MS / 1000 };
 };
-const validFactor = (type: unknown, code: unknown) => (type === "RECOVERY_CODE" ? code === MOCK_RECOVERY : code === MOCK_TOTP);
-const secret = () => ({ enrollmentId: crypto.randomUUID(), otpauthUri: "otpauth://totp/Anok:mock?secret=JBSWY3DPEHPK3PXP&issuer=Anok", manualKey: "JBSWY3DPEHPK3PXP", expiresAt: new Date(Date.now() + 5 * 60000).toISOString() });
+// 서버는 TOTP → 복구 코드 순으로 단일 code를 검증한다.
+const validCode = (code: unknown) => code === MOCK_TOTP || code === MOCK_RECOVERY;
+const secret = () => ({ otpAuthUri: "otpauth://totp/Anok:mock?secret=JBSWY3DPEHPK3PXP&issuer=Anok", secret: "JBSWY3DPEHPK3PXP" });
 const recoveryCodes = () => Array.from({ length: 8 }, (_, i) => `RECOVERY-${String(i + 1).padStart(4, "0")}`);
 
 const CREATED = new Set([
-  "POST /api/auth/company-registrations/complete", "POST /api/auth/invitations/accept", "POST /api/auth/step-up/challenges",
+  "POST /api/auth/company-registrations/complete", "POST /api/auth/invitations/accept",
   "POST /api/admin/users/invitations", "POST /api/admin/departments", "POST /api/admin/teams",
 ]);
 const CREATED_PATTERNS = [
@@ -89,6 +86,17 @@ const ACCEPTED_PATTERNS = [
   /^POST \/api\/meetings\/[^/]+\/candidates\/[^/]+\/materialize$/,
 ];
 
+// 서버의 @RequestPart("metadata")(JSON) + @RequestPart("file")에 대응한다. metadata가 없거나 JSON이 아니면 400.
+async function readMultipart(fd: FormData): Promise<Record<string, unknown>> {
+  const meta = fd.get("metadata");
+  let parsed: Record<string, unknown> = {};
+  try {
+    const text = typeof meta === "string" ? meta : meta ? await (meta as Blob).text() : "";
+    parsed = JSON.parse(text);
+  } catch { throw new ApiError(400, "VALIDATION_ERROR", "입력값이 올바르지 않습니다.", crypto.randomUUID(), [{ field: "metadata", reason: "REQUIRED" }]); }
+  return { ...parsed, file: fd.get("file") ?? undefined };
+}
+
 // fetch 계층 mock: 실제 Gateway처럼 status/헤더/공통 JSON Wrapper를 만들어 돌려주므로
 // http.ts의 래퍼 파싱, 401→refresh 재시도, STEP_UP_REQUIRED 처리가 mock 모드에서도 동일하게 실행된다.
 export async function mockFetch(input: string, init: { method?: string; headers?: Record<string, string>; body?: string | FormData }): Promise<Response> {
@@ -98,7 +106,7 @@ export async function mockFetch(input: string, init: { method?: string; headers?
   const isForm = typeof FormData !== "undefined" && init.body instanceof FormData;
   const o: RequestOptions = {
     method, path: url.pathname, query: Object.fromEntries(url.searchParams),
-    body: isForm ? Object.fromEntries((init.body as FormData).entries()) : init.body ? JSON.parse(init.body as string) : undefined,
+    body: isForm ? await readMultipart(init.body as FormData) : init.body ? JSON.parse(init.body as string) : undefined,
   };
   const token = /^Bearer (.+)$/.exec(init.headers?.Authorization ?? "")?.[1] ?? null;
   const requestId = crypto.randomUUID();
@@ -176,15 +184,15 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
     if (!x) return fail(401, "INVALID_CREDENTIALS");
     if (x.status !== "ACTIVE") return fail(403, "USER_INACTIVE");
     const exp = new Date(Date.now() + 5 * 60000).toISOString();
-    if (x.mfa) return { type: "MFA_REQUIRED", challengeToken: `mfa:${x.userId}`, expiresAt: exp };
-    if (x.companyRole === "ADMIN") return { type: "ADMIN_MFA_BOOTSTRAP_REQUIRED", challengeToken: `boot:${x.userId}`, expiresAt: exp };
-    return { ...session(x), user: toMe(x) };
+    if (x.mfa) return { status: "LOGIN_MFA_REQUIRED", challengeToken: `mfa:${x.userId}`, challengeExpiresAt: exp };
+    if (x.companyRole === "ADMIN") return { status: "ADMIN_MFA_BOOTSTRAP_REQUIRED", challengeToken: `boot:${x.userId}`, challengeExpiresAt: exp };
+    return { status: "FULL_SESSION", ...session(x) };
   }
   if (key === "POST /api/auth/login/mfa") {
     const x = byId(String(b.challengeToken ?? "").replace(/^mfa:/, ""));
     if (!x || !String(b.challengeToken).startsWith("mfa:")) return fail(401, "AUTH_CHALLENGE_INVALID");
-    if (!validFactor(b.factorType, b.factorCode)) return fail(401, "MFA_CODE_INVALID");
-    return { ...session(x), user: toMe(x) };
+    if (!validCode(b.code)) return fail(401, "MFA_CODE_INVALID");
+    return session(x);
   }
   if (key === "POST /api/auth/admin-mfa-bootstrap/enrollment") {
     if (!String(b.challengeToken ?? "").startsWith("boot:")) return fail(401, "AUTH_CHALLENGE_INVALID");
@@ -193,22 +201,21 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
   if (key === "POST /api/auth/admin-mfa-bootstrap/enrollment/confirm") {
     const x = byId(String(b.challengeToken ?? "").replace(/^boot:/, ""));
     if (!x || !String(b.challengeToken).startsWith("boot:")) return fail(401, "AUTH_CHALLENGE_INVALID");
-    if (b.totpCode !== MOCK_TOTP) return fail(401, "MFA_CODE_INVALID");
+    if (b.code !== MOCK_TOTP) return fail(401, "MFA_CODE_INVALID");
     x.mfa = true; x.version++; markStepUp();
-    return { ...session(x), recoveryCodes: recoveryCodes(), user: toMe(x) };
+    return { ...session(x), recoveryCodes: recoveryCodes() };
   }
   if (key === "POST /api/auth/refresh") {
     const x = byId(sessionStorage.getItem(SESSION_KEY) ?? "");
     if (!x) return fail(401, "REFRESH_INVALID");
     if (x.status !== "ACTIVE") return fail(403, "USER_INACTIVE");
-    const s = session(x);
-    return { accessToken: s.accessToken, tokenType: s.tokenType, expiresAt: s.expiresAt };
+    return session(x);
   }
   if (key === "POST /api/auth/logout" || key === "POST /api/auth/logout-all") { sessionStorage.removeItem(SESSION_KEY); clearStepUp(); return undefined; }
   if (key === "POST /api/auth/password-resets") {
     const e: FieldError[] = []; const email = str(e, b, "email", 1, 254);
     if (email && !EMAIL.test(email)) e.push({ field: "email", reason: "INVALID_FORMAT" });
-    check(e); return { accepted: true };
+    check(e); return undefined;
   }
   if (key === "POST /api/auth/password-resets/complete") {
     const e: FieldError[] = []; str(e, b, "newPassword", 12, 128); check(e);
@@ -223,12 +230,26 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
     if (users.some(v => v.email === inv.email)) return fail(409, "EMAIL_UNAVAILABLE");
     const x: MockUser = { userId: crypto.randomUUID(), email: inv.email, password: b.password, fullName: b.fullName, displayName: b.displayName, jobTitle: null, companyRole: "EMPLOYEE", status: "ACTIVE", departmentId: null, teamId: null, version: 1, mfa: false };
     users.push(x); invitations.delete(inv.invitationId);
-    return { userId: x.userId, companyId: company.companyId, companyRole: "EMPLOYEE", nextAction: "LOGIN" };
+    return { userId: x.userId };
   }
   if (path.startsWith("/api/auth/company-registrations")) {
-    if (key.endsWith("/verify-email")) return { challengeToken: "reg-mock", expiresAt: new Date(Date.now() + 600000).toISOString() };
-    if (key.endsWith("/complete")) return { companyId: company.companyId, adminUserId: users[2].userId, nextAction: "LOGIN" };
-    return key.endsWith("/company-registrations") ? { accepted: true, verificationExpiresAt: new Date(Date.now() + 600000).toISOString() } : { accepted: true };
+    const e: FieldError[] = [];
+    if (key.endsWith("/verify-email")) {
+      str(e, b, "verificationToken", 1, 512); check(e);
+      if (!String(b.verificationToken).startsWith("verify-")) return fail(401, "REGISTRATION_VERIFICATION_INVALID");
+      return { challengeToken: "reg-mock", expiresAt: new Date(Date.now() + 600000).toISOString() };
+    }
+    if (key.endsWith("/complete")) {
+      str(e, b, "challengeToken", 1, 512); str(e, b, "adminFullName", 1, 100); str(e, b, "adminDisplayName", 1, 100); str(e, b, "password", 12, 128); check(e);
+      if (b.challengeToken !== "reg-mock") return fail(401, "REGISTRATION_CHALLENGE_INVALID");
+      return { companyId: crypto.randomUUID(), adminUserId: crypto.randomUUID(), nextAction: "LOGIN" };
+    }
+    if (key.endsWith("/resend-verification")) { str(e, b, "adminEmail", 1, 254); check(e); return { accepted: true }; }
+    str(e, b, "companyName", 2, 100); const adminEmail = str(e, b, "adminEmail", 1, 254);
+    if (adminEmail && !EMAIL.test(adminEmail)) e.push({ field: "adminEmail", reason: "Email" });
+    check(e);
+    if (users.some(x => x.email === adminEmail!.toLowerCase())) return fail(409, "EMAIL_UNAVAILABLE");
+    return { accepted: true, verificationExpiresAt: new Date(Date.now() + 600000).toISOString() };
   }
 
   // ── Bearer routes ──
@@ -238,17 +259,16 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
   if (key === "POST /api/auth/step-up/complete") {
     if (b.challengeToken !== `step:${me.userId}`) return fail(401, "AUTH_CHALLENGE_INVALID");
     if (b.password !== me.password) return fail(401, "INVALID_CREDENTIALS");
-    if (!validFactor(b.factorType, b.factorCode)) return fail(401, "MFA_CODE_INVALID");
+    if (!validCode(b.code)) return fail(401, "MFA_CODE_INVALID");
     markStepUp();
-    return { accessToken: newToken(me), tokenType: "Bearer", expiresAt: new Date(Date.now() + ACCESS_TTL_MS).toISOString(), authTime: new Date().toISOString() };
+    return { accessToken: newToken(me), expiresIn: ACCESS_TTL_MS / 1000 };
   }
 
   if (key === "GET /api/users/me") return toMe(me);
   if (key === "PUT /api/users/me") {
     const e: FieldError[] = [];
-    const fullName = str(e, b, "fullName", 1, 100); const displayName = str(e, b, "displayName", 1, 100); const jobTitle = str(e, b, "jobTitle", 0, 100, false); check(e);
-    if (b.version !== me.version) return fail(409, "VERSION_CONFLICT");
-    Object.assign(me, { fullName, displayName, jobTitle: jobTitle ?? null, version: me.version + 1 });
+    const displayName = str(e, b, "displayName", 1, 160); const jobTitle = str(e, b, "jobTitle", 0, 160, false); check(e);
+    Object.assign(me, { displayName, jobTitle: jobTitle ?? null, version: me.version + 1 });
     return toMe(me);
   }
   if (key === "PUT /api/users/me/password") {
@@ -262,11 +282,11 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
     return secret();
   }
   if (key === "POST /api/users/me/mfa/enrollment/confirm") {
-    if (b.totpCode !== MOCK_TOTP) return fail(401, "MFA_CODE_INVALID");
-    me.mfa = true; me.version++; return { enabled: true, recoveryCodes: recoveryCodes() };
+    if (b.code !== MOCK_TOTP) return fail(401, "MFA_CODE_INVALID");
+    me.mfa = true; me.version++; return { recoveryCodes: recoveryCodes() };
   }
   if (key === "POST /api/users/me/mfa/recovery-codes/use") {
-    if (b.recoveryCode !== MOCK_RECOVERY) return fail(401, "RECOVERY_CODE_INVALID");
+    if (b.code !== MOCK_RECOVERY) return fail(401, "RECOVERY_CODE_INVALID");
     return { used: true, remainingUnusedCodes: 7 };
   }
   if (key === "POST /api/users/me/mfa/recovery-codes/rotate") {
@@ -276,17 +296,18 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
   }
   if (key === "POST /api/users/me/mfa/disable") {
     if (me.companyRole === "ADMIN") return fail(403, "ACTIVE_ADMIN_MFA_REQUIRED");
-    if (b.currentPassword !== me.password) return fail(401, "INVALID_CREDENTIALS");
+    if (b.password !== me.password) return fail(401, "INVALID_CREDENTIALS");
     if (!me.mfa) return fail(409, "MFA_NOT_ACTIVE");
+    if (!validCode(b.code)) return fail(401, "MFA_CODE_INVALID");
     me.mfa = false; me.version++; return undefined;
   }
 
   if (key === "GET /api/organization") {
-    const q = String(o.query?.q ?? "").toLowerCase();
     return {
-      departments: departments.filter(d => d.status === "ACTIVE"), teams: teams.filter(t => t.status === "ACTIVE"),
-      users: users.filter(x => x.status === "ACTIVE" && (!q || x.displayName.toLowerCase().includes(q)))
-        .map(x => ({ userId: x.userId, displayName: x.displayName, fullName: x.fullName, jobTitle: x.jobTitle, departmentId: x.departmentId, teamId: x.teamId })),
+      users: users.filter(x => x.status === "ACTIVE")
+        .map(x => ({ userId: x.userId, displayName: x.displayName, jobTitle: x.jobTitle, companyRole: x.companyRole, departmentId: x.departmentId, teamId: x.teamId })),
+      departments: departments.filter(d => d.status === "ACTIVE").map(({ id, name, status }) => ({ id, name, status })),
+      teams: teams.filter(t => t.status === "ACTIVE").map(({ id, departmentId, name, status }) => ({ id, departmentId, name, status })),
     };
   }
 
@@ -345,7 +366,7 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
     if (m[2] === "password-reset") {
       if (!target) return fail(404, "USER_NOT_FOUND");
       if (target.status !== "ACTIVE") return fail(409, "TARGET_USER_INACTIVE");
-      return { accepted: true };
+      return undefined;
     }
     if (m[2] === "status") {
       stepUp(me);
@@ -370,12 +391,12 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
     }
     const e: FieldError[] = []; const job = str(e, b, "jobTitle", 0, 100, false); check(e);
     const row = versioned(target, b, "USER_NOT_FOUND");
-    const dept = b.departmentId ? departments.find(d => d.departmentId === b.departmentId) : null;
-    const team = b.teamId ? teams.find(t => t.teamId === b.teamId) : null;
+    const dept = b.departmentId ? departments.find(d => d.id === b.departmentId) : null;
+    const team = b.teamId ? teams.find(t => t.id === b.teamId) : null;
     if (b.departmentId && !dept) return fail(404, "DEPARTMENT_NOT_FOUND");
     if (b.teamId && !team) return fail(404, "TEAM_NOT_FOUND");
-    if ((dept && dept.status !== "ACTIVE") || (team && team.status !== "ACTIVE") || (team && dept && team.departmentId !== dept.departmentId) || (team && !dept)) return fail(409, "ORGANIZATION_STATE_CONFLICT");
-    Object.assign(row, { departmentId: dept?.departmentId ?? null, teamId: team?.teamId ?? null, jobTitle: job ?? null, version: row.version + 1 });
+    if ((dept && dept.status !== "ACTIVE") || (team && team.status !== "ACTIVE") || (team && dept && team.departmentId !== dept.id) || (team && !dept)) return fail(409, "ORGANIZATION_STATE_CONFLICT");
+    Object.assign(row, { departmentId: dept?.id ?? null, teamId: team?.id ?? null, jobTitle: job ?? null, version: row.version + 1 });
     return toAdmin(row);
   }
   if (key === "GET /api/admin/company") return company;
@@ -388,49 +409,49 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
     return company;
   }
 
-  if (key === "GET /api/admin/departments") return departments.filter(d => !o.query?.status || d.status === o.query.status);
+  if (key === "GET /api/admin/departments") return departments;
   if (key === "POST /api/admin/departments") {
     const e: FieldError[] = []; const name = str(e, b, "name", 1, 100); check(e);
     if (departments.some(d => d.name === name && d.status === "ACTIVE")) return fail(409, "DEPARTMENT_NAME_CONFLICT");
-    const d: DepartmentResponse = { departmentId: crypto.randomUUID(), name: name!, status: "ACTIVE", version: 1 };
+    const d: DepartmentResponse = { id: crypto.randomUUID(), name: name!, status: "ACTIVE", version: 1 };
     departments.push(d); return d;
   }
   m = /^\/api\/admin\/departments\/([^/]+)(\/inactivate)?$/.exec(path);
   if (m) {
-    const d = versioned(departments.find(v => v.departmentId === m![1]), b, "DEPARTMENT_NOT_FOUND");
+    const d = versioned(departments.find(v => v.id === m![1]), b, "DEPARTMENT_NOT_FOUND");
     if (m[2]) {
       if (d.status === "INACTIVE") return fail(409, "DEPARTMENT_ALREADY_INACTIVE");
-      if (teams.some(t => t.departmentId === d.departmentId && t.status === "ACTIVE") || users.some(x => x.departmentId === d.departmentId && x.status === "ACTIVE")) return fail(409, "ORGANIZATION_STATE_CONFLICT");
-      d.status = "INACTIVE"; d.version++; return d;
+      if (teams.some(t => t.departmentId === d.id && t.status === "ACTIVE") || users.some(x => x.departmentId === d.id && x.status === "ACTIVE")) return fail(409, "ORGANIZATION_STATE_CONFLICT");
+      d.status = "INACTIVE"; d.version++; return undefined;
     }
     const e: FieldError[] = []; const name = str(e, b, "name", 1, 100); check(e);
     if (departments.some(v => v !== d && v.name === name && v.status === "ACTIVE")) return fail(409, "DEPARTMENT_NAME_CONFLICT");
     d.name = name!; d.version++; return d;
   }
-  if (key === "GET /api/admin/teams") return teams.filter(t => (!o.query?.departmentId || t.departmentId === o.query.departmentId) && (!o.query?.status || t.status === o.query.status));
+  if (key === "GET /api/admin/teams") return teams;
   if (key === "POST /api/admin/teams") {
     const e: FieldError[] = []; const name = str(e, b, "name", 1, 100); if (!b.departmentId) e.push({ field: "departmentId", reason: "REQUIRED" }); check(e);
-    const d = departments.find(v => v.departmentId === b.departmentId);
+    const d = departments.find(v => v.id === b.departmentId);
     if (!d) return fail(404, "DEPARTMENT_NOT_FOUND");
     if (d.status !== "ACTIVE") return fail(409, "DEPARTMENT_INACTIVE");
-    if (teams.some(t => t.departmentId === d.departmentId && t.name === name && t.status === "ACTIVE")) return fail(409, "TEAM_NAME_CONFLICT");
-    const t: TeamResponse = { teamId: crypto.randomUUID(), departmentId: d.departmentId, name: name!, status: "ACTIVE", version: 1 };
+    if (teams.some(t => t.departmentId === d.id && t.name === name && t.status === "ACTIVE")) return fail(409, "TEAM_NAME_CONFLICT");
+    const t: TeamResponse = { id: crypto.randomUUID(), departmentId: d.id, name: name!, status: "ACTIVE", version: 1 };
     teams.push(t); return t;
   }
   m = /^\/api\/admin\/teams\/([^/]+)(\/inactivate)?$/.exec(path);
   if (m) {
-    const t = versioned(teams.find(v => v.teamId === m![1]), b, "TEAM_NOT_FOUND");
+    const t = versioned(teams.find(v => v.id === m![1]), b, "TEAM_NOT_FOUND");
     if (m[2]) {
       if (t.status === "INACTIVE") return fail(409, "TEAM_ALREADY_INACTIVE");
-      if (users.some(x => x.teamId === t.teamId && x.status === "ACTIVE")) return fail(409, "ORGANIZATION_STATE_CONFLICT");
-      t.status = "INACTIVE"; t.version++; return t;
+      if (users.some(x => x.teamId === t.id && x.status === "ACTIVE")) return fail(409, "ORGANIZATION_STATE_CONFLICT");
+      t.status = "INACTIVE"; t.version++; return undefined;
     }
     const e: FieldError[] = []; const name = str(e, b, "name", 1, 100); check(e);
-    const d = departments.find(v => v.departmentId === b.departmentId);
+    const d = departments.find(v => v.id === b.departmentId);
     if (!d) return fail(404, "DEPARTMENT_NOT_FOUND");
     if (d.status !== "ACTIVE") return fail(409, "DEPARTMENT_INACTIVE");
-    if (teams.some(v => v !== t && v.departmentId === d.departmentId && v.name === name && v.status === "ACTIVE")) return fail(409, "TEAM_NAME_CONFLICT");
-    Object.assign(t, { departmentId: d.departmentId, name, version: t.version + 1 }); return t;
+    if (teams.some(v => v !== t && v.departmentId === d.id && v.name === name && v.status === "ACTIVE")) return fail(409, "TEAM_NAME_CONFLICT");
+    Object.assign(t, { departmentId: d.id, name, version: t.version + 1 }); return t;
   }
 
   return fail(404, "NOT_FOUND");

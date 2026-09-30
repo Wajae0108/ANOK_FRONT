@@ -12,10 +12,11 @@ type Row = TaskResponse & { projectName: string; myRoleInProject: ProjectRole };
 const MEMBER_NEXT: Record<TaskStatus, TaskStatus[]> = { TODO: ["IN_PROGRESS"], IN_PROGRESS: ["TODO", "DONE"], DONE: [], CANCELED: [] };
 const MANAGER_NEXT: Record<TaskStatus, TaskStatus[]> = { TODO: ["IN_PROGRESS", "CANCELED"], IN_PROGRESS: ["TODO", "DONE", "CANCELED"], DONE: ["IN_PROGRESS"], CANCELED: ["TODO"] };
 
-async function loadMyTasks(): Promise<Row[]> {
+// 서버는 "me" 같은 별칭 필터가 없다. assigneeUserId에는 본인 ID만 허용된다(다른 사람이면 TASK_FILTER_FORBIDDEN).
+async function loadMyTasks(userId: string): Promise<Row[]> {
   const projects = (await api.listProjects({ limit: 100 })).items;
   const perProject = await Promise.all(projects.map(async p => {
-    const tasks = (await api.listTasks(p.projectId, { assignee: "me", limit: 100 })).items;
+    const tasks = (await api.listTasks(p.projectId, { assigneeUserId: userId, limit: 100 })).items;
     return tasks.map(t => ({ ...t, projectName: p.name, myRoleInProject: p.myRole }));
   }));
   return perProject.flat().sort((a, b) => (a.dueAt ?? "9999").localeCompare(b.dueAt ?? "9999"));
@@ -27,7 +28,7 @@ export default function MyTasksScreen() {
   const [view, setView] = useState<"list" | "kanban">("list");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
-  const { data, setData, loading, error, reload } = useLoad(loadMyTasks, [me?.userId]);
+  const { data, setData, loading, error, reload } = useLoad(() => (me ? loadMyTasks(me.userId) : Promise.resolve([])), [me?.userId]);
   const rows = data ?? [];
   const filtered = statusFilter === "ALL" ? rows : rows.filter(r => r.status === statusFilter);
 

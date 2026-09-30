@@ -1,5 +1,7 @@
-// Anok_03_Document_File_API_Event_Spec_v2_3_3_FINAL — Public API 27개
-// `permissionSource`는 명세에 exact enum이 없어 권한 §3(Permission Resolution)의 출처 4가지로 가정했다. 백엔드 확정 후 좁힐 것.
+// ANOK_BACKEND document_service의 실제 Controller/DTO 기준.
+// - 업로드(POST /documents, /documents/{id}/versions, /meetings/{id}/attachments)는 multipart이며 JSON `metadata` part + `file` part로 보낸다.
+// - 버전 응답의 현재 여부 필드는 `current`다. UI는 `isCurrent`를 쓰므로 adapter(toVersion)에서 변환한다.
+// - DELETE(permissions/project-attachments/meeting attachments)는 204 본문 없음, 다운로드는 공통 Wrapper 없는 raw stream이다.
 import { downloadFile, request } from "./http";
 import type { OffsetPage, Rfc3339, Uuid } from "./types";
 
@@ -10,8 +12,8 @@ export type AclStatus = "ACTIVE" | "SUSPENDED_BY_IDENTITY" | "REVOKED";
 export type DocumentProcessingStatus = "NOT_REQUESTED" | "QUEUED" | "PARSING" | "PARSED" | "EMBEDDING" | "READY" | "BLOCKED_BY_POLICY" | "FAILED" | "STALE";
 export type ExternalAiPolicy = "INHERIT" | "ALLOWED" | "BLOCKED";
 export type SensitivityClassification = "INTERNAL" | "CONFIDENTIAL" | "PII" | "CORE_TRADE_SECRET";
-export type EffectivePermission = "OWNER" | "EDITOR" | "VIEWER";
-export type PermissionSource = "OWNER" | "EXPLICIT_ACL" | "PROJECT_INHERITED" | "MEETING_INHERITED";
+export type EffectivePermission = "NONE" | "VIEWER" | "EDITOR" | "OWNER";
+export type PermissionSource = "NONE" | "OWNER" | "EXPLICIT_ACL" | "INHERITED";
 export type OwnerRecoveryType = "RESTORE_OWNER_ACCESS" | "TRANSFER_OWNERSHIP";
 export type OwnerRecoveryReasonCode = "OWNER_REACTIVATED" | "OWNER_UNAVAILABLE" | "EMPLOYMENT_CHANGE" | "SECURITY_RECOVERY" | "OTHER";
 
@@ -22,10 +24,12 @@ export interface DocumentResponse {
   processingStatus: DocumentProcessingStatus; effectivePermission: EffectivePermission; permissionSource: PermissionSource;
   createdByUserId: Uuid; createdAt: Rfc3339; updatedAt: Rfc3339; archivedAt?: Rfc3339 | null; version: number;
 }
-export interface DocumentVersionResponse {
+interface DocumentVersionWire {
   versionId: Uuid; documentId: Uuid; versionNo: number; originalFilename: string; sizeBytes: number; detectedMimeType: string;
-  sha256: string; uploadedByUserId: Uuid; createdAt: Rfc3339; isCurrent: boolean;
+  sha256: string; uploadedByUserId: Uuid; createdAt: Rfc3339; current: boolean;
 }
+export type DocumentVersionResponse = Omit<DocumentVersionWire, "current"> & { isCurrent: boolean };
+const toVersion = ({ current, ...v }: DocumentVersionWire): DocumentVersionResponse => ({ ...v, isCurrent: current });
 export interface DocumentPermissionResponse { userId: Uuid; permission: AclPermission; status: AclStatus; createdByUserId: Uuid; createdAt: Rfc3339; updatedAt: Rfc3339; version: number }
 export interface DocumentProjectAttachmentResponse { attachmentId: Uuid; documentId: Uuid; projectId: Uuid; createdAt: Rfc3339 }
 export interface MeetingAttachmentResponse {
@@ -41,10 +45,12 @@ export interface DocumentOwnerRecoveryResponse { documentId: Uuid; ownerUserId: 
 
 const auth = { auth: "bearer" } as const;
 
-function uploadForm(file: File, fields: Record<string, string | undefined>): FormData {
+// 서버는 @RequestPart("metadata")를 JSON으로, @RequestPart("file")을 파일로 받는다. metadata는 application/json Blob이어야 한다.
+function uploadForm(file: File, metadata: Record<string, unknown>): FormData {
+  const clean = Object.fromEntries(Object.entries(metadata).filter(([, v]) => v !== undefined));
   const fd = new FormData();
+  fd.append("metadata", new Blob([JSON.stringify(clean)], { type: "application/json" }));
   fd.append("file", file);
-  for (const [k, v] of Object.entries(fields)) if (v !== undefined) fd.append(k, v);
   return fd;
 }
 
@@ -71,14 +77,16 @@ export const transferDocumentOwner = (documentId: Uuid, b: { targetUserId: Uuid;
   request<DocumentResponse>({ method: "PUT", path: `/api/documents/${documentId}/owner`, body: b, ...auth });
 
 // ── Versions ─────────────────────────────────────────────────────
-export const listDocumentVersions = (documentId: Uuid, q: { offset?: number; limit?: number } = {}) =>
-  request<OffsetPage<DocumentVersionResponse>>({ method: "GET", path: `/api/documents/${documentId}/versions`, query: q, ...auth });
+export const listDocumentVersions = async (documentId: Uuid, q: { offset?: number; limit?: number } = {}): Promise<OffsetPage<DocumentVersionResponse>> => {
+  const page = await request<OffsetPage<DocumentVersionWire>>({ method: "GET", path: `/api/documents/${documentId}/versions`, query: q, ...auth });
+  return { ...page, items: page.items.map(toVersion) };
+};
 
-export const uploadDocumentVersion = (documentId: Uuid, file: File, expectedDocumentVersion: number) =>
-  request<DocumentVersionResponse>({ method: "POST", path: `/api/documents/${documentId}/versions`, body: uploadForm(file, { expectedDocumentVersion: String(expectedDocumentVersion) }), ...auth, idempotent: true });
+export const uploadDocumentVersion = async (documentId: Uuid, file: File, expectedDocumentVersion: number) =>
+  toVersion(await request<DocumentVersionWire>({ method: "POST", path: `/api/documents/${documentId}/versions`, body: uploadForm(file, { expectedDocumentVersion }), ...auth, idempotent: true }));
 
-export const getDocumentVersion = (documentId: Uuid, versionId: Uuid) =>
-  request<DocumentVersionResponse>({ method: "GET", path: `/api/documents/${documentId}/versions/${versionId}`, ...auth });
+export const getDocumentVersion = async (documentId: Uuid, versionId: Uuid) =>
+  toVersion(await request<DocumentVersionWire>({ method: "GET", path: `/api/documents/${documentId}/versions/${versionId}`, ...auth }));
 
 export const downloadCurrentVersion = (documentId: Uuid) => downloadFile(`/api/documents/${documentId}/download`);
 export const downloadVersion = (documentId: Uuid, versionId: Uuid) => downloadFile(`/api/documents/${documentId}/versions/${versionId}/download`);

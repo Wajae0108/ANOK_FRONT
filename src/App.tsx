@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { USE_MOCK } from "./api/config";
 import { mockDemoUserId } from "./api/mock";
-import type { CurrentUserResponse } from "./api/identity";
+import { getOrganization } from "./api/identity";
+import type { CurrentUserResponse, OrganizationDirectoryResponse } from "./api/identity";
 import CompanyAdminScreen from "./admin/CompanyAdmin";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import LoginScreen from "./auth/LoginScreen";
@@ -633,9 +634,10 @@ function colorFor(seed: string) {
   for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
-function toCurrentUser(me: CurrentUserResponse): CurrentUser {
+// /api/users/me는 부서·팀 ID만 주므로 이름은 조직 디렉터리(/api/organization)에서 찾는다.
+function toCurrentUser(me: CurrentUserResponse, org: OrganizationDirectoryResponse | null): CurrentUser {
   const demo = USE_MOCK ? DEMO_USERS.find(d => d.id === mockDemoUserId(me.email)) : undefined;
-  const team = me.team?.name ?? me.department?.name ?? "";
+  const team = org?.teams.find(t => t.id === me.teamId)?.name ?? org?.departments.find(d => d.id === me.departmentId)?.name ?? "";
   if (demo) return { ...demo, userId: me.userId, name: me.displayName, avatar: me.displayName.charAt(0), team: team || demo.team, companyRole: me.companyRole };
   return { id: -1, userId: me.userId, name: me.displayName, avatar: me.displayName.charAt(0), color: colorFor(me.userId), team, companyRole: me.companyRole, projectRoles: {} };
 }
@@ -657,7 +659,13 @@ function AuthGate() {
 
 function MainApp({ me }: { me: CurrentUserResponse }) {
   const { logout } = useAuth();
-  const user = useMemo(() => toCurrentUser(me), [me]);
+  const [org, setOrg] = useState<OrganizationDirectoryResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getOrganization().then(o => { if (alive) setOrg(o); }).catch(() => { /* 이름 표시만 비므로 조용히 무시 */ });
+    return () => { alive = false; };
+  }, [me.userId, me.teamId, me.departmentId]);
+  const user = useMemo(() => toCurrentUser(me, org), [me, org]);
   const [showAccount, setShowAccount] = useState(false);
   const [screen, setScreen] = useState<Screen>("home");
   const [ctx, setCtx] = useState<NavCtx>({});

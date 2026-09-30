@@ -86,9 +86,9 @@ function resolvePermission(doc: Doc, userId: string): { permission: EffectivePer
   if (doc.ownerUserId === userId && doc.ownerAccessState === "ACTIVE" && identity?.status === "ACTIVE") return { permission: "OWNER", source: "OWNER" };
   const acl = acls.find(a => a.documentId === doc.documentId && a.userId === userId && a.status === "ACTIVE");
   if (acl) return { permission: acl.permission === "DENY" ? "NONE" : acl.permission, source: "EXPLICIT_ACL" };
-  if (projectAttachments.some(pa => pa.documentId === doc.documentId && isEffectiveProjectMember(pa.projectId, userId))) return { permission: "VIEWER", source: "PROJECT_INHERITED" };
-  if (meetingAttachments.some(ma => ma.documentId === doc.documentId && getMeetingAttachmentAccess(ma.meetingId, userId).hasAccess)) return { permission: "VIEWER", source: "MEETING_INHERITED" };
-  return { permission: "NONE", source: "OWNER" };
+  if (projectAttachments.some(pa => pa.documentId === doc.documentId && isEffectiveProjectMember(pa.projectId, userId))) return { permission: "VIEWER", source: "INHERITED" };
+  if (meetingAttachments.some(ma => ma.documentId === doc.documentId && getMeetingAttachmentAccess(ma.meetingId, userId).hasAccess)) return { permission: "VIEWER", source: "INHERITED" };
+  return { permission: "NONE", source: "NONE" };
 }
 function findDoc(documentId: string): Doc { const d = docs.find(x => x.documentId === documentId); if (!d) return fail(404, "DOCUMENT_NOT_FOUND"); return d; }
 function requireReader(doc: Doc, userId: string) { const r = resolvePermission(doc, userId); if (r.permission === "NONE") return fail(403, "DOCUMENT_ACCESS_DENIED"); return r; }
@@ -114,7 +114,8 @@ function toDocumentResponse(doc: Doc, userId: string): DocumentResponse {
     createdByUserId: doc.createdByUserId, createdAt: doc.createdAt, updatedAt: doc.updatedAt, archivedAt: doc.archivedAt, version: doc.version,
   };
 }
-const toVersionResponse = (v: Version, doc: Doc): DocumentVersionResponse => ({ versionId: v.versionId, documentId: v.documentId, versionNo: v.versionNo, originalFilename: v.originalFilename, sizeBytes: v.sizeBytes, detectedMimeType: v.detectedMimeType, sha256: v.sha256, uploadedByUserId: v.uploadedByUserId, createdAt: v.createdAt, isCurrent: v.versionId === doc.currentVersionId });
+// 서버 Wire 형태: 현재 여부 필드는 `current`다(UI용 `isCurrent` 변환은 api/document.ts의 adapter가 한다).
+const toVersionResponse = (v: Version, doc: Doc): Omit<DocumentVersionResponse, "isCurrent"> & { current: boolean } => ({ versionId: v.versionId, documentId: v.documentId, versionNo: v.versionNo, originalFilename: v.originalFilename, sizeBytes: v.sizeBytes, detectedMimeType: v.detectedMimeType, sha256: v.sha256, uploadedByUserId: v.uploadedByUserId, createdAt: v.createdAt, current: v.versionId === doc.currentVersionId });
 const toPermissionResponse = (a: Acl): DocumentPermissionResponse => ({ userId: a.userId, permission: a.permission, status: a.status, createdByUserId: a.createdByUserId, createdAt: a.createdAt, updatedAt: a.updatedAt, version: a.version });
 const toProcessingResponse = (p: Processing): DocumentProcessingResponse => ({ documentId: p.documentId, documentVersionId: p.documentVersionId, status: p.status, processingGeneration: p.processingGeneration, failureCode: p.failureCode, blockCode: p.blockCode, updatedAt: p.updatedAt, version: p.version });
 
@@ -124,7 +125,7 @@ function toMeetingAttachmentResponse(ma: MeetingAttachment, doc: Doc, userId: st
   return { attachmentId: ma.attachmentId, meetingId: ma.meetingId, documentId: doc.documentId, title: doc.title, ownerUserId: doc.ownerUserId, currentVersionId: v.versionId, originalFilename: v.originalFilename, sizeBytes: v.sizeBytes, detectedMimeType: v.detectedMimeType, effectivePermission: perm.permission === "NONE" ? "VIEWER" : perm.permission, createdAt: ma.createdAt };
 }
 
-// mockFetch가 body를 FormData면 { ...entries, file: File } 형태 객체로 넘겨준다.
+// mockFetch가 multipart body를 { ...JSON metadata part, file: File } 형태 객체로 풀어서 넘겨준다.
 export function routeDocument(o: RequestOptions, me: MockUser): unknown | Promise<unknown> {
   const b: any = o.body ?? {};
   const path = o.path;

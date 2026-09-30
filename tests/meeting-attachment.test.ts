@@ -41,7 +41,7 @@ describe("Meeting 자료(첨부 문서) 시나리오", () => {
     const gyuchanList = await doc.listDocuments();
     ok("[핵심] 회의에 병합된 문서는 참가자의 문서함 전체 목록에도 노출되지 않음", !gyuchanList.items.some((d: any) => d.documentId === myDoc.documentId));
     const viewed = await doc.getDocument(myDoc.documentId);
-    ok("회의 참가자는 병합 문서 상세를 직접 링크로 열람 가능(VIEWER, MEETING_INHERITED)", viewed.effectivePermission === "VIEWER" && viewed.permissionSource === "MEETING_INHERITED");
+    ok("회의 참가자는 병합 문서 상세를 직접 링크로 열람 가능(VIEWER, INHERITED)", viewed.effectivePermission === "VIEWER" && viewed.permissionSource === "INHERITED");
     ok("회의 참가자는 회의 자료 목록도 조회 가능", (await doc.listMeetingAttachments(meeting.meetingId)).items.length === 1);
     ok("참가자는 OWNER가 아니므로 기존 문서 재병합 시도 시 403", (await code(doc.attachExistingDocumentToMeeting(meeting.meetingId, myDoc.documentId))) === "403 DOCUMENT_OWNER_REQUIRED");
 

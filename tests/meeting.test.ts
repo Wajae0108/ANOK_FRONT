@@ -218,7 +218,7 @@ describe("Meeting(04) 시나리오", () => {
     await loginAdmin("insung@anok.io");
     ok("관리자 회의 설정 변경도 step-up 필요", (await code(mtg.updateMeetingSettings({ defaultSensitivityClassification: "CONFIDENTIAL", version: 1 }))) === "403 STEP_UP_REQUIRED");
     const ch = await idn.createStepUpChallenge();
-    const su = await idn.completeStepUp({ challengeToken: ch.challengeToken, password: "AnokDemo!2026", factorType: "TOTP", factorCode: "123456" });
+    const su = await idn.completeStepUp({ challengeToken: ch.challengeToken, password: "AnokDemo!2026", code: "123456" });
     tokenStore.set(su.accessToken);
     const settings = await mtg.getMeetingSettings();
     ok("회의 설정 기본값 조회", settings.defaultSensitivityClassification === "INTERNAL");

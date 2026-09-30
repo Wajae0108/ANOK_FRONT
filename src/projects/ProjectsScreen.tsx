@@ -28,10 +28,10 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-4">
         <p className="text-[15px] font-bold text-slate-900">새 프로젝트</p>
         <Field label="프로젝트명" error={fields.name}>
-          <input autoFocus value={name} onChange={e => setName(e.target.value)} maxLength={200} placeholder="예: 인증 시스템 개편" className={inputCls} />
+          <input autoFocus value={name} onChange={e => setName(e.target.value)} maxLength={120} placeholder="예: 인증 시스템 개편" className={inputCls} />
         </Field>
         <Field label="설명 (선택)" error={fields.description}>
-          <textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} className={inputCls} />
+          <textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={4000} className={inputCls} />
         </Field>
         <p className="text-[11px] text-slate-400">생성한 사람이 자동으로 담당자(MANAGER)가 됩니다.</p>
         {error && <p className="text-[12px] text-rose-500 font-medium">{error}</p>}

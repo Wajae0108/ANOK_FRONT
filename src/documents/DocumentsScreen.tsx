@@ -38,8 +38,8 @@ function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded:
         <button onClick={() => fileRef.current?.click()} className="w-full py-6 border-2 border-dashed border-slate-200 rounded-xl text-[13px] text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors">
           {file ? <span className="font-semibold text-slate-700">{file.name} ({fmtSize(file.size)})</span> : "파일을 선택하세요 (최대 50MB)"}
         </button>
-        <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={200} className={inputCls} /></Field>
-        <Field label="설명 (선택)" error={fields.description}><textarea rows={2} value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} className={inputCls} /></Field>
+        <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={160} className={inputCls} /></Field>
+        <Field label="설명 (선택)" error={fields.description}><textarea rows={2} value={description} onChange={e => setDescription(e.target.value)} maxLength={4000} className={inputCls} /></Field>
         <Field label="민감도 분류">
           <select value={sensitivity} onChange={e => setSensitivity(e.target.value as SensitivityClassification)} className={inputCls}>
             <option value="INTERNAL">일반</option><option value="CONFIDENTIAL">기밀</option><option value="PII">개인정보</option><option value="CORE_TRADE_SECRET">핵심 영업기밀</option>
