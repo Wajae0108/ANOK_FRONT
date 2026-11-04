@@ -7,6 +7,7 @@ import { USE_MOCK } from "../api/config";
 import { mockInviteToken } from "../api/mock";
 import { useAuth } from "../auth/AuthProvider";
 import { Avatar, Card, ErrorBox, Field, ghostBtn, inputCls, labelCls, Modal, primaryBtn, Section, Spinner, useLoad } from "../ui/kit";
+import MeetingAdmin from "./MeetingAdmin";
 
 const REASONS: { value: LifecycleReasonClass; label: string }[] = [
   { value: "TEMPORARY_SUSPENSION", label: "일시 정지" },
@@ -527,24 +528,31 @@ function AiSettingsTab() {
 }
 
 // ───────────────────────── 화면 ─────────────────────────
-type Tab = "회사설정" | "사용자" | "조직" | "AI설정" | "MFA";
+// 관리자 콘솔의 메뉴는 AdminShell 사이드바가 선택한다(tab). 이 화면은 선택된 관리 기능만 그린다.
+export type AdminTab = "회사설정" | "사용자" | "조직" | "AI설정" | "회의" | "MFA";
+export const ADMIN_TABS: Array<{ id: AdminTab; label: string; desc: string }> = [
+  { id: "회사설정", label: "회사 설정", desc: "회사 프로필과 기본 정보를 관리합니다." },
+  { id: "사용자", label: "사용자", desc: "구성원 초대, 소속·권한 변경, 계정 상태를 관리합니다." },
+  { id: "조직", label: "조직", desc: "부서와 팀 구조를 관리합니다." },
+  { id: "AI설정", label: "AI 설정", desc: "회사 단위 AI 사용 정책과 사용량을 확인합니다." },
+  { id: "회의", label: "회의", desc: "새 회의의 기본 민감도를 정하고, 복구가 필요한 회의를 처리합니다." },
+  { id: "MFA", label: "보안(MFA)", desc: "다단계 인증 정책을 확인합니다." },
+];
+export const isAdminTab = (v?: string): v is AdminTab => ADMIN_TABS.some(t => t.id === v);
 
-export default function CompanyAdminScreen() {
-  const [tab, setTab] = useState<Tab>("회사설정");
+export default function CompanyAdminScreen({ tab }: { tab: AdminTab }) {
   const orgLoad = useLoad<Org>(async () => {
     const [departments, teams] = await Promise.all([api.listDepartments(), api.listTeams()]);
     return { departments, teams };
   }, []);
   const org: Org = orgLoad.data ?? { departments: [], teams: [] };
+  const meta = ADMIN_TABS.find(t => t.id === tab)!;
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="shrink-0 bg-white border-b border-slate-100 px-6 py-4">
-        <div className="flex">
-          {(["회사설정", "사용자", "조직", "AI설정", "MFA"] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)} className={`px-4 py-2.5 text-[13px] font-semibold border-b-2 transition-colors ${tab === t ? "border-indigo-500 text-indigo-600" : "border-transparent text-slate-400 hover:text-slate-600"}`}>{t}</button>
-          ))}
-        </div>
+        <h2 className="text-[16px] font-extrabold text-slate-900">{meta.label}</h2>
+        <p className="text-[12px] text-slate-400 mt-0.5">{meta.desc}</p>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 bg-slate-50/40">
@@ -553,6 +561,8 @@ export default function CompanyAdminScreen() {
         {tab === "조직" && (orgLoad.loading && !orgLoad.data ? <Spinner /> : orgLoad.error && !orgLoad.data ? <ErrorBox message={orgLoad.error} onRetry={orgLoad.reload} /> : <OrgTab org={org} reload={orgLoad.reload} />)}
 
         {tab === "AI설정" && <AiSettingsTab />}
+
+        {tab === "회의" && <MeetingAdmin />}
 
         {tab === "MFA" && (
           <Card className="max-w-xl p-5 space-y-2">

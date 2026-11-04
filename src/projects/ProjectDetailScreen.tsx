@@ -8,7 +8,8 @@ import type {
 import * as mtg from "../api/meeting";
 import { errorText, fieldErrorMap } from "../api/errors";
 import { useAuth } from "../auth/AuthProvider";
-import { Card, ErrorBox, Field, ghostBtn, inputCls, labelCls, Modal, primaryBtn, Section, Spinner, useLoad } from "../ui/kit";
+import { Card, ErrorBox, Field, ghostBtn, inputCls, labelCls, Modal, primaryBtn, Section, Spinner, Tabs, useLoad } from "../ui/kit";
+import { ArrowLeftIcon } from "../ui/icons";
 import { fmtDateTime, MeetingStatusBadge } from "../meetings/shared";
 import { DecisionStatusBadge, ProjectRoleBadge, ProjectStatusBadge, TaskStatusBadge, daysUntil, fmtDate, useOrgUsers } from "./shared";
 
@@ -172,7 +173,8 @@ function AddMemberModal({ projectId, existing, onClose, onAdded }: { projectId: 
 
 function MembersTab({ projectId, canManage, myUserId }: { projectId: string; canManage: boolean; myUserId?: string }) {
   const { data, setData, loading, error, reload } = useLoad(() => api.listProjectMembers(projectId, { limit: 100 }), [projectId]);
-  const { nameOf } = useOrgUsers();
+  const { nameOf, users } = useOrgUsers();
+  const jobOf = (userId: string) => users.find(u => u.userId === userId)?.jobTitle ?? "";
   const [showAdd, setShowAdd] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -210,6 +212,7 @@ function MembersTab({ projectId, canManage, myUserId }: { projectId: string; can
         <div key={m.membershipId} className="flex items-center gap-3 px-5 py-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-semibold text-slate-800 truncate">{nameOf(m.userId)}{m.userId === myUserId && " (나)"}</p>
+            {jobOf(m.userId) && <p className="text-[12px] text-slate-500 truncate">{jobOf(m.userId)}</p>}
             <p className="text-[11px] text-slate-400">{m.status === "SUSPENDED_BY_IDENTITY" ? "일시 정지됨" : m.status === "ACTIVE" ? "활성" : m.status}{!m.identityAvailability && " · 계정 비활성"}</p>
           </div>
           {canManage ? (
@@ -552,29 +555,19 @@ export default function ProjectDetailScreen({ projectId, navigate, initialTab }:
   const canManage = project.myRole === "MANAGER";
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      <div className="shrink-0 bg-white border-b border-slate-100 px-6 py-4">
+    <div className="h-full flex flex-col overflow-hidden bg-white">
+      <div className="shrink-0 bg-white px-8 pt-5">
+        <button onClick={() => navigate("projects")} className="inline-flex items-center gap-1.5 text-[12px] font-medium text-slate-400 hover:text-slate-700 mb-2 rounded focus-visible:outline-2 focus-visible:outline-indigo-500"><ArrowLeftIcon size={13} />프로젝트</button>
         <div className="flex items-center gap-3 mb-3">
-          <button onClick={() => navigate("projects")} className="w-8 h-8 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-          <div className="flex-1">
-            <div className="flex items-center gap-3">
-              <h2 className="text-[17px] font-extrabold text-slate-900">{project.name}</h2>
-              <ProjectStatusBadge status={project.status} />
-              <ProjectRoleBadge role={project.myRole} />
-              {project.managerRecoveryRequired && <span className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full">담당자 없음</span>}
-            </div>
-          </div>
+          <h2 className="text-[20px] font-extrabold text-slate-900 tracking-tight">{project.name}</h2>
+          <ProjectStatusBadge status={project.status} />
+          <ProjectRoleBadge role={project.myRole} />
+          {project.managerRecoveryRequired && <span className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full">담당자 없음</span>}
         </div>
-        <div className="flex gap-0 overflow-x-auto">
-          {TABS.map(t => (
-            <button key={t} onClick={() => setTab(t)} className={`px-4 py-2.5 text-[13px] font-semibold border-b-2 transition-colors shrink-0 ${tab === t ? "border-indigo-500 text-indigo-600" : "border-transparent text-slate-400 hover:text-slate-600"}`}>{t}</button>
-          ))}
-        </div>
+        <Tabs<Tab> label="프로젝트 메뉴" value={tab} onChange={setTab} items={TABS.map(t => ({ value: t, label: t }))} />
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 bg-slate-50/40">
+      <div className="flex-1 overflow-y-auto px-8 py-6 bg-slate-50/40">
         {tab === "개요" && <OverviewTab p={project} canManage={canManage} onChanged={setProject} />}
         {tab === "구성원" && <MembersTab projectId={projectId} canManage={canManage} myUserId={me?.userId} />}
         {tab === "업무" && <TasksTab projectId={projectId} canManage={canManage} myUserId={me?.userId} />}

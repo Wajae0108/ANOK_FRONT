@@ -10,7 +10,7 @@ import {
 import type { MockUser } from "./mockCore";
 import { routeAi, streamAiMessage } from "./mockAi";
 import { downloadResponse, routeDocument } from "./mockDocument";
-import { routeMeeting } from "./mockMeeting";
+import { routeMeeting, streamMeetingChat } from "./mockMeeting";
 import { routeNotification, subscribe as subscribeNotifications } from "./mockNotification";
 import { routeProject } from "./mockProject";
 import type { FieldError } from "./types";
@@ -84,10 +84,14 @@ const CREATED_PATTERNS = [
 const ACCEPTED_PATTERNS = [
   /^POST \/api\/documents\/[^/]+\/processing$/, /^POST \/api\/documents\/[^/]+\/processing\/retry$/,
   /^POST \/api\/meetings\/[^/]+\/candidates\/[^/]+\/materialize$/,
+  // 보고서 요청(기본·회사 양식 모두 202), 회의록 재생성, 후처리 재시도도 202다.
+  /^POST \/api\/meetings\/[^/]+\/custom-report$/, /^POST \/api\/meetings\/[^/]+\/minutes\/regenerate$/, /^POST \/api\/meetings\/[^/]+\/postprocess\/retry$/,
 ];
 
 // 서버의 @RequestPart("metadata")(JSON) + @RequestPart("file")에 대응한다. metadata가 없거나 JSON이 아니면 400.
-async function readMultipart(fd: FormData): Promise<Record<string, unknown>> {
+// 보고서 양식 올리기(PUT /minutes-template)는 `file` 파트만 보낸다(metadata 파트 없음).
+async function readMultipart(fd: FormData, requireMetadata = true): Promise<Record<string, unknown>> {
+  if (!requireMetadata) return { file: fd.get("file") ?? undefined };
   const meta = fd.get("metadata");
   let parsed: Record<string, unknown> = {};
   try {
@@ -106,7 +110,7 @@ export async function mockFetch(input: string, init: { method?: string; headers?
   const isForm = typeof FormData !== "undefined" && init.body instanceof FormData;
   const o: RequestOptions = {
     method, path: url.pathname, query: Object.fromEntries(url.searchParams),
-    body: isForm ? await readMultipart(init.body as FormData) : init.body ? JSON.parse(init.body as string) : undefined,
+    body: isForm ? await readMultipart(init.body as FormData, !url.pathname.endsWith("/minutes-template")) : init.body ? JSON.parse(init.body as string) : undefined,
   };
   const token = /^Bearer (.+)$/.exec(init.headers?.Authorization ?? "")?.[1] ?? null;
   const requestId = crypto.randomUUID();
@@ -147,6 +151,12 @@ export async function mockStream(path: string, headers: Record<string, string>, 
 
   const aiMsgMatch = /^\/api\/ai\/conversations\/([^/]+)\/messages$/.exec(path);
   if (aiMsgMatch) return streamAiMessage(aiMsgMatch[1], body, me, signal);
+  // 회의 채팅 SSE (GET /api/meetings/{id}/chat/stream?afterSequence=N, Last-Event-ID 헤더)
+  const chatMatch = /^\/api\/meetings\/([^/]+)\/chat\/stream(?:\?.*)?$/.exec(path);
+  if (chatMatch) {
+    const after = new URL(path, "http://mock").searchParams.get("afterSequence");
+    return streamMeetingChat(chatMatch[1], Number(headers["Last-Event-ID"] ?? after ?? 0) || 0, me, signal);
+  }
   if (path !== "/api/notifications/stream") return new Response(null, { status: 404 });
 
   const encoder = new TextEncoder();
@@ -317,7 +327,7 @@ async function route(o: RequestOptions, token: string | null): Promise<unknown> 
 
   // ── Document / File (03) ──
   if (path.startsWith("/api/admin/documents")) { stepUp(me); return routeDocument(o, me); }
-  if (path === "/api/documents" || path.startsWith("/api/documents/") || /^\/api\/meetings\/[^/]+\/attachments/.test(path)) return routeDocument(o, me);
+  if (path === "/api/documents" || path.startsWith("/api/documents/") || /^\/api\/meetings\/[^/]+\/(attachments|minutes-template)/.test(path)) return routeDocument(o, me);
 
   // ── Meeting (04) ──
   if (path.startsWith("/api/admin/meetings") || path === "/api/admin/meeting-settings") { stepUp(me); return routeMeeting(o, me); }

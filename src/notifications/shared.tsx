@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as api from "../api/notification";
 import type { NotificationResponse, NotificationType } from "../api/notification";
 import { errorText } from "../api/errors";
+import { MATERIALIZE_FAILURE_TEXT } from "../meetings/shared";
 
 const PRESENTATION_TEXT: Record<NotificationType, string> = {
   PROJECT_MEMBER_ADDED: "프로젝트에 구성원으로 추가되었습니다.",
@@ -17,13 +18,27 @@ const PRESENTATION_TEXT: Record<NotificationType, string> = {
   MEETING_REMINDER: "예정된 회의가 있습니다.",
   MEETING_MINUTES_APPROVED: "회의록이 승인되었습니다.",
   MEETING_POSTPROCESS_ATTENTION: "회의 처리에 확인이 필요합니다.",
-  CANDIDATE_MATERIALIZATION_FAILED: "AI 후보 생성에 실패했습니다.",
+  CANDIDATE_MATERIALIZATION_FAILED: "AI 후보를 프로젝트에 반영하지 못했습니다.",
   DOCUMENT_OWNERSHIP_TRANSFERRED: "문서 소유권이 이전되었습니다.",
   DOCUMENT_PROCESSING_FAILED: "문서 처리에 확인이 필요합니다.",
   FILE_SECURITY_BLOCKED: "파일이 보안 정책에 의해 차단되었습니다.",
 };
-export function presentationText(n: { presentationCode: string }): string {
-  return PRESENTATION_TEXT[n.presentationCode as NotificationType] ?? "새 알림이 있습니다.";
+// 알림에는 이름·제목·본문이 없고 ID와 코드(safeParameters)뿐이다 — 문구는 type·reasonCode별로 프론트가 만든다(FRONTEND_00 11-2).
+const POSTPROCESS_ATTENTION_TEXT: Record<string, string> = {
+  RECORDING_FAILED: "녹음이 없어 회의록을 만들 수 없습니다.",
+  STT_FAILED: "음성 인식에 실패해 회의록을 만들지 못했습니다.",
+  AI_EGRESS_BLOCKED: "AI 처리가 허용되지 않은 회의라 회의록이 만들어지지 않았습니다.",
+  MINUTES_GENERATION_FAILED: "회의록 생성에 실패했습니다. 확인이 필요합니다.",
+  CANDIDATE_GENERATION_FAILED: "회의록은 만들어졌지만 결정·업무 후보 생성에 실패했습니다.",
+  SOURCE_EXPIRED: "원본 보관 기간이 지나 회의 처리를 더 진행할 수 없습니다.",
+  ATTACHMENT_POLICY_BLOCKED: "회의 자료가 정책에 막혀 처리할 수 없습니다.",
+};
+export function presentationText(n: { presentationCode: string; safeParameters?: Record<string, unknown> }): string {
+  const base = PRESENTATION_TEXT[n.presentationCode as NotificationType] ?? "새 알림이 있습니다.";
+  const reason = typeof n.safeParameters?.reasonCode === "string" ? n.safeParameters.reasonCode : null;
+  if (reason && n.presentationCode === "MEETING_POSTPROCESS_ATTENTION") return POSTPROCESS_ATTENTION_TEXT[reason] ?? base;
+  if (reason && n.presentationCode === "CANDIDATE_MATERIALIZATION_FAILED") return `${base} ${MATERIALIZE_FAILURE_TEXT[reason] ?? ""}`.trim();
+  return base;
 }
 
 type Category = "업무" | "프로젝트" | "회의" | "문서";
@@ -52,7 +67,7 @@ export interface NotificationTarget { screen: string; ctx: Record<string, unknow
 export function targetForNotification(n: NotificationResponse): NotificationTarget | null {
   switch (n.resourceType) {
     case "PROJECT": return { screen: "project-detail", ctx: { projectId: n.resourceId } };
-    case "TASK": return { screen: "tasks", ctx: {} };
+    case "TASK": return { screen: "tasks", ctx: { taskId: n.resourceId } };
     case "MEETING": return { screen: "meeting-detail", ctx: { meetingId: n.resourceId } };
     case "MEETING_MINUTES": return n.secondaryResourceId ? { screen: "meeting-detail", ctx: { meetingId: n.secondaryResourceId } } : null;
     case "DOCUMENT": return { screen: "document-detail", ctx: { docId: n.resourceId } };
@@ -62,6 +77,8 @@ export function targetForNotification(n: NotificationResponse): NotificationTarg
 
 export interface NotificationCenter {
   items: NotificationResponse[]; unreadCount: number; loading: boolean; error: string | null; hasMore: boolean;
+  // 실시간(SSE)으로 방금 도착한 알림. 목록 복구(최초·재연결)로 들어온 알림은 담지 않는다 — 팝업용.
+  latest: NotificationResponse | null;
   loadMore: () => void; markRead: (id: string) => void; markAllRead: () => void; reload: () => void;
 }
 
@@ -72,6 +89,7 @@ export function useNotificationCenter(myUserId?: string): NotificationCenter {
   const [error, setError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const [latest, setLatest] = useState<NotificationResponse | null>(null);
   const seenIds = useRef(new Set<string>());
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -102,8 +120,10 @@ export function useNotificationCenter(myUserId?: string): NotificationCenter {
       e => {
         if (seenIds.current.has(e.notificationId)) return;
         seenIds.current.add(e.notificationId);
-        setItems(prev => [{ ...e, read: false, readAt: null }, ...prev]);
+        const fresh: NotificationResponse = { ...e, read: false, readAt: null };
+        setItems(prev => [fresh, ...prev]);
         setUnreadCount(c => c + 1);
+        setLatest(fresh);
       },
       () => { /* 재연결은 streamNotifications가 백오프로 처리한다. 인증 오류(401/403)일 때만 중단된다. */ },
       // 서버는 끊긴 동안의 알림을 replay하지 않으므로 재연결 직후 목록과 unread-count를 다시 맞춘다.
@@ -128,5 +148,5 @@ export function useNotificationCenter(myUserId?: string): NotificationCenter {
   function loadMore() { if (hasMore && !loading) fetchPage(nextCursor, false); }
   function reload() { fetchPage(null, true); refreshUnread(); }
 
-  return { items, unreadCount, loading, error, hasMore, loadMore, markRead, markAllRead, reload };
+  return { items, unreadCount, loading, error, hasMore, latest, loadMore, markRead, markAllRead, reload };
 }

@@ -21,7 +21,13 @@ function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded:
 
   function pick(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
-    if (f) { setFile(f); if (!title.trim()) setTitle(f.name.replace(/\.[^.]+$/, "")); }
+    if (!f) return;
+    // 올리기 전에 50MB·파일 이름 길이·형식을 먼저 거른다. 서버는 크기 초과나 너무 긴 이름을 413으로, 압축·실행 파일을 400으로 거절한다.
+    const bad = api.validateUploadFile(f);
+    setError(bad);
+    if (bad) { setFile(null); if (fileRef.current) fileRef.current.value = ""; return; }
+    setFile(f);
+    if (!title.trim()) setTitle(f.name.replace(/\.[^.]+$/, "").slice(0, api.UPLOAD_MAX_TITLE));
   }
   async function submit() {
     if (!file) return;
@@ -38,6 +44,7 @@ function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded:
         <button onClick={() => fileRef.current?.click()} className="w-full py-6 border-2 border-dashed border-slate-200 rounded-xl text-[13px] text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors">
           {file ? <span className="font-semibold text-slate-700">{file.name} ({fmtSize(file.size)})</span> : "파일을 선택하세요 (최대 50MB)"}
         </button>
+        <p className="text-[11px] text-slate-400 -mt-2">이렇게 올린 문서는 AI가 자동으로 읽지 않습니다. 회의 자료로 붙일 때 글자 추출이 시작됩니다.</p>
         <Field label="제목" error={fields.title}><input value={title} onChange={e => setTitle(e.target.value)} maxLength={160} className={inputCls} /></Field>
         <Field label="설명 (선택)" error={fields.description}><textarea rows={2} value={description} onChange={e => setDescription(e.target.value)} maxLength={4000} className={inputCls} /></Field>
         <Field label="민감도 분류">

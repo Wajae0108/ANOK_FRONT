@@ -25,7 +25,7 @@ function Field({ label, error, children }: { label: string; error?: string; chil
 // API-17~24: 내 프로필/비밀번호/MFA. 서버의 UpdateMeRequest는 displayName·jobTitle만 받고(fullName·version 없음),
 // MFA 해제는 currentPassword가 아니라 password + code(TOTP 또는 복구 코드)를 요구한다.
 export default function MyAccountModal({ onClose }: { onClose: () => void }) {
-  const { me, reloadMe } = useAuth();
+  const { me, reloadMe, endSessionAfterPasswordChange } = useAuth();
   const [tab, setTab] = useState<Tab>("프로필");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +59,8 @@ export default function MyAccountModal({ onClose }: { onClose: () => void }) {
   const savePassword = () => run(async () => {
     await changeMyPassword({ currentPassword: pw.current, newPassword: pw.next });
     setPw({ current: "", next: "" });
+    // 비밀번호를 바꾸면 모든 기기의 세션과 액세스 토큰이 즉시 폐기된다(logout-all과 같다). 이 기기도 다시 로그인해야 한다.
+    endSessionAfterPasswordChange();
   }, "비밀번호를 변경했습니다.");
 
   const startEnroll = () => run(async () => { setSecret(await startMfaEnrollment(mfaPw)); setMfaPw(""); });

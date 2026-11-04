@@ -9,6 +9,7 @@ import { errorText, fieldErrorMap } from "../api/errors";
 import { USE_MOCK } from "../api/config";
 import { MOCK_DEMO_ACCOUNTS, MOCK_PASSWORD, MOCK_TOTP } from "../api/mock";
 import QrCode from "../ui/QrCode";
+import logoFull from "../assets/logo/logo-full.png";
 import { useAuth } from "./AuthProvider";
 
 type Mode =
@@ -37,7 +38,7 @@ const primaryCls = "w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white tex
 const linkCls = "text-[12px] text-indigo-500 hover:text-indigo-700 font-semibold";
 
 export default function LoginScreen() {
-  const { establish, sessionExpired } = useAuth();
+  const { establish, sessionExpired, passwordChanged } = useAuth();
   const [mode, setMode] = useState<Mode>({ k: "login" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,11 +134,8 @@ export default function LoginScreen() {
   return (
     <div className="min-h-full h-full flex items-center justify-center bg-slate-50 p-6 overflow-y-auto">
       <div className="w-full max-w-sm space-y-4 my-auto">
-        <div className="flex items-center gap-3 justify-center">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "linear-gradient(135deg,#6366f1,#4f6ef7)" }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </div>
-          <p className="text-[20px] font-extrabold text-slate-900 tracking-tight">Anok</p>
+        <div className="flex justify-center">
+          <img src={logoFull} alt="Anok — Knowledge flows. Better decisions." className="h-28 w-auto" />
         </div>
 
         <div className="bg-white border border-slate-100 rounded-2xl shadow-[0_1px_4px_rgba(0,0,0,0.05)] p-6 space-y-4">
@@ -145,6 +143,9 @@ export default function LoginScreen() {
 
           {sessionExpired && mode.k === "login" && (
             <p className="text-[12px] text-amber-600 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">세션이 만료되어 로그아웃되었습니다. 다시 로그인해 주세요.</p>
+          )}
+          {passwordChanged && mode.k === "login" && (
+            <p className="text-[12px] text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">비밀번호를 바꿨습니다. 보안을 위해 모든 기기에서 로그아웃되었으니 새 비밀번호로 다시 로그인해 주세요. (바로 로그인이 거절되면 1~2초 뒤에 다시 시도해 주세요)</p>
           )}
           {notice && <p className="text-[12px] text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">{notice}</p>}
 

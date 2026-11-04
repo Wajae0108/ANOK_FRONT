@@ -12,9 +12,13 @@ interface AuthContextValue {
   status: Status;
   me: CurrentUserResponse | null;
   sessionExpired: boolean;
+  /** 비밀번호를 바꿔 모든 기기의 세션이 폐기되었다 — 로그인 화면에 안내를 띄운다. */
+  passwordChanged: boolean;
   establish: (accessToken: string) => Promise<void>;
   reloadMe: () => Promise<void>;
   logout: () => Promise<void>;
+  /** 비밀번호 변경 직후: 서버가 모든 기기의 세션과 액세스 토큰을 이미 폐기했으므로 이 기기도 로컬 세션만 지우고 다시 로그인하게 한다. */
+  endSessionAfterPasswordChange: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -29,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>("loading");
   const [me, setMe] = useState<CurrentUserResponse | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [passwordChanged, setPasswordChanged] = useState(false);
   const [stepUpOpen, setStepUpOpen] = useState(false);
   const stepUpWaiter = useRef<Promise<boolean> | null>(null);
   const stepUpResolve = useRef<((ok: boolean) => void) | null>(null);
@@ -67,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const m = await getMe();
     setMe(m);
     setSessionExpired(false);
+    setPasswordChanged(false);
     setStatus("authenticated");
   }, []);
 
@@ -76,7 +82,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try { await apiLogout(); } catch { /* 서버 실패와 무관하게 로컬 세션은 종료한다 */ }
     clear();
     setSessionExpired(false);
+    setPasswordChanged(false);
   }, [clear]);
+
+  const endSessionAfterPasswordChange = useCallback(() => { clear(); setSessionExpired(false); setPasswordChanged(true); }, [clear]);
 
   const finishStepUp = (ok: boolean) => {
     setStepUpOpen(false);
@@ -85,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     stepUpWaiter.current = null;
   };
 
-  const value = useMemo(() => ({ status, me, sessionExpired, establish, reloadMe, logout }), [status, me, sessionExpired, establish, reloadMe, logout]);
+  const value = useMemo(() => ({ status, me, sessionExpired, passwordChanged, establish, reloadMe, logout, endSessionAfterPasswordChange }), [status, me, sessionExpired, passwordChanged, establish, reloadMe, logout, endSessionAfterPasswordChange]);
 
   return (
     <AuthContext.Provider value={value}>

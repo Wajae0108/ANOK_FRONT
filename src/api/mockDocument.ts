@@ -6,7 +6,10 @@ import type { RequestOptions } from "./http";
 import { byId, check, fail, id, invalid, offsetPage, principal, str, versioned } from "./mockCore";
 import type { MockUser } from "./mockCore";
 import { effectiveProjectRole, isEffectiveProjectMember, projectExists, SEED_PROJECT_IDS } from "./mockProject";
-import { getMeetingAttachmentAccess } from "./mockMeeting";
+import { getMeetingAttachmentAccess, getMeetingReviewAccess, recordingInfo } from "./mockMeeting";
+import { getMeetingTemplateFile, putMeetingTemplateFile } from "./mockTemplate";
+import { DOCX_MIME } from "./document";
+import { reportDocxBytes } from "../meetings/reportExport";
 import { emit } from "./mockNotification";
 import type {
   AclPermission, AclStatus, DocumentPermissionResponse, DocumentProcessingResponse, DocumentProcessingStatus,
@@ -27,7 +30,7 @@ interface Version {
 }
 interface Acl { documentId: string; userId: string; permission: AclPermission; status: AclStatus; createdByUserId: string; createdAt: string; updatedAt: string; version: number }
 interface ProjectAttachment { attachmentId: string; documentId: string; projectId: string; createdAt: string }
-interface MeetingAttachment { attachmentId: string; meetingId: string; documentId: string; createdAt: string }
+interface MeetingAttachment { attachmentId: string; meetingId: string; documentId: string; createdAt: string; createdAtMs: number }
 interface Processing { documentId: string; documentVersionId: string; status: DocumentProcessingStatus; processingGeneration: number; failureCode: string | null; blockCode: string | null; updatedAt: string; version: number }
 
 const now = () => new Date().toISOString();
@@ -119,10 +122,31 @@ const toVersionResponse = (v: Version, doc: Doc): Omit<DocumentVersionResponse, 
 const toPermissionResponse = (a: Acl): DocumentPermissionResponse => ({ userId: a.userId, permission: a.permission, status: a.status, createdByUserId: a.createdByUserId, createdAt: a.createdAt, updatedAt: a.updatedAt, version: a.version });
 const toProcessingResponse = (p: Processing): DocumentProcessingResponse => ({ documentId: p.documentId, documentVersionId: p.documentVersionId, status: p.status, processingGeneration: p.processingGeneration, failureCode: p.failureCode, blockCode: p.blockCode, updatedAt: p.updatedAt, version: p.version });
 
+// 회의 자료는 연결하는 즉시 서버가 글자 뽑기를 시작한다: QUEUED → (PARSING) → READY. AI가 글자를 뽑을 수 있는 형식은
+// PDF·Word(.docx)·PowerPoint(.pptx)·텍스트뿐이고, 나머지(이미지·오디오·Excel·구형 Office)는 FAILED + NOT_SUPPORTED가 된다(⑥ 6절).
+// 실제 파싱 대신 연결 시각으로부터 경과한 시간으로 상태를 흉내 낸다.
+const PARSABLE = /\.(pdf|docx|pptx|txt|md|csv)$/i;
+function attachmentProcessing(ma: MeetingAttachment, filename: string): { processingStatus: DocumentProcessingStatus; processingFailureCode?: string } {
+  const age = Date.now() - ma.createdAtMs;
+  if (!PARSABLE.test(filename)) return age < 700 ? { processingStatus: "QUEUED" } : { processingStatus: "FAILED", processingFailureCode: "NOT_SUPPORTED" };
+  return { processingStatus: age < 700 ? "QUEUED" : age < 1400 ? "PARSING" : "READY" };
+}
 function toMeetingAttachmentResponse(ma: MeetingAttachment, doc: Doc, userId: string): MeetingAttachmentResponse {
   const v = versions.find(x => x.versionId === doc.currentVersionId)!;
   const perm = resolvePermission(doc, userId);
-  return { attachmentId: ma.attachmentId, meetingId: ma.meetingId, documentId: doc.documentId, title: doc.title, ownerUserId: doc.ownerUserId, currentVersionId: v.versionId, originalFilename: v.originalFilename, sizeBytes: v.sizeBytes, detectedMimeType: v.detectedMimeType, effectivePermission: perm.permission === "NONE" ? "VIEWER" : perm.permission, createdAt: ma.createdAt };
+  return { attachmentId: ma.attachmentId, meetingId: ma.meetingId, documentId: doc.documentId, title: doc.title, ownerUserId: doc.ownerUserId, currentVersionId: v.versionId, originalFilename: v.originalFilename, sizeBytes: v.sizeBytes, detectedMimeType: v.detectedMimeType, effectivePermission: perm.permission === "NONE" ? "VIEWER" : perm.permission, createdAt: ma.createdAt, ...attachmentProcessing(ma, v.originalFilename) };
+}
+
+// 보고서 양식(PNG·JPG·PDF, 10MB 이하)은 파일 내용(첫 바이트)으로 형식을 판단한다. 확장자만 .png인 임의 파일은 거절한다.
+const TEMPLATE_MAX = 10 * 1024 * 1024;
+async function sniffTemplate(file: File): Promise<string | null> {
+  const b = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return "application/pdf";
+  // Word(.docx)는 ZIP(PK) 파일이다. 서버는 내용으로 판별하므로 확장자만 .docx인 다른 ZIP은 거절하는 것까지는 흉내 내지 않는다.
+  if (b[0] === 0x50 && b[1] === 0x4b && /\.docx$/i.test(file.name)) return DOCX_MIME;
+  return null;
 }
 
 // mockFetch가 multipart body를 { ...JSON metadata part, file: File } 형태 객체로 풀어서 넘겨준다.
@@ -143,7 +167,7 @@ export function routeDocument(o: RequestOptions, me: MockUser): unknown | Promis
     return { items: page.items.map(d => toDocumentResponse(d, me.userId)), page: page.page };
   }
   if (key === "POST /api/documents") {
-    const e: FieldError[] = []; const title = str(e, b, "title", 1, 200); const description = str(e, b, "description", 0, 2000, false);
+    const e: FieldError[] = []; const title = str(e, b, "title", 1, 160); const description = str(e, b, "description", 0, 4000, false);
     const aiPolicy = (b.externalAiPolicy ?? "INHERIT") as ExternalAiPolicy;
     const sensitivity = (b.sensitivityClassification ?? "INTERNAL") as SensitivityClassification;
     if (!["INHERIT", "ALLOWED", "BLOCKED"].includes(aiPolicy)) e.push({ field: "externalAiPolicy", reason: "INVALID_ENUM" });
@@ -166,7 +190,7 @@ export function routeDocument(o: RequestOptions, me: MockUser): unknown | Promis
     if (o.method === "GET") { requireReader(doc, me.userId); return toDocumentResponse(doc, me.userId); }
     const perm = requireEditor(doc, me.userId);
     if (doc.status === "ARCHIVED") return fail(409, "DOCUMENT_ARCHIVED");
-    const e: FieldError[] = []; const title = str(e, b, "title", 1, 200); const description = str(e, b, "description", 0, 2000, false);
+    const e: FieldError[] = []; const title = str(e, b, "title", 1, 160); const description = str(e, b, "description", 0, 4000, false);
     if (!["INTERNAL", "CONFIDENTIAL", "PII", "CORE_TRADE_SECRET"].includes(b.sensitivityClassification)) e.push({ field: "sensitivityClassification", reason: "INVALID_ENUM" });
     check(e);
     const row = versioned(doc, b, "DOCUMENT_NOT_FOUND");
@@ -323,6 +347,23 @@ export function routeDocument(o: RequestOptions, me: MockUser): unknown | Promis
     return undefined;
   }
 
+  // ── Meeting minutes template (문서 서비스: 검토 담당자만, 취소된 회의 제외. 사유를 구분하지 않는 403) ──
+  m = /^\/api\/meetings\/([^/]+)\/minutes-template$/.exec(path);
+  if (m) {
+    if (o.method !== "PUT") return fail(500, "INTERNAL_SERVER_ERROR"); // 문서 서비스는 지원하지 않는 메서드를 405가 아니라 500으로 준다
+    const access = getMeetingReviewAccess(m[1], me.userId);
+    if (!access.exists || access.canceled || !access.isReviewOwner) return fail(403, "MEETING_ATTACHMENT_FORBIDDEN");
+    const file = b.file;
+    if (!(file instanceof File)) return invalid({ field: "file", reason: "REQUIRED" });
+    if (file.size > TEMPLATE_MAX) return fail(413, "MINUTES_TEMPLATE_TOO_LARGE");
+    return (async () => {
+      const mimeType = file.size === 0 ? null : await sniffTemplate(file);
+      if (!mimeType) return fail(400, "FILE_TYPE_NOT_ALLOWED");
+      const t = putMeetingTemplateFile({ meetingId: m![1], filename: file.name, mimeType, sizeBytes: file.size, sha256: await sha256Hex(file), uploadedAt: now() });
+      return { templateId: t.templateId, meetingId: t.meetingId, filename: t.filename, mimeType: t.mimeType, sizeBytes: t.sizeBytes, sha256: t.sha256, uploadedAt: t.uploadedAt };
+    })();
+  }
+
   // ── Meeting attachments (실제 Meeting(04) 참가자/진행 상태를 getMeetingAttachmentAccess로 참조) ──
   m = /^\/api\/meetings\/([^/]+)\/attachments$/.exec(path);
   if (m) {
@@ -337,7 +378,7 @@ export function routeDocument(o: RequestOptions, me: MockUser): unknown | Promis
     }
     if (!access.hasAccess) return fail(403, "MEETING_ATTACHMENT_FORBIDDEN");
     if (!access.controlOpen) return fail(409, "MEETING_EVIDENCE_FROZEN");
-    const e: FieldError[] = []; const title = str(e, b, "title", 1, 200); const description = str(e, b, "description", 0, 2000, false);
+    const e: FieldError[] = []; const title = str(e, b, "title", 1, 160); const description = str(e, b, "description", 0, 4000, false);
     const aiPolicy = (b.externalAiPolicy ?? "INHERIT") as ExternalAiPolicy;
     check(e);
     const file = validateFile(b.file);
@@ -350,7 +391,7 @@ export function routeDocument(o: RequestOptions, me: MockUser): unknown | Promis
       const d: Doc = { documentId, title: title!, description: description ?? null, ownerUserId: me.userId, ownerAccessState: "ACTIVE", status: "ACTIVE", externalAiPolicy: aiPolicy, sensitivityClassification: finalSensitivity, currentVersionId: v.versionId, createdByUserId: me.userId, createdAt: now(), updatedAt: now(), archivedAt: null, version: 1 };
       docs.push(d);
       processing.set(documentId, { documentId, documentVersionId: v.versionId, status: "NOT_REQUESTED", processingGeneration: 0, failureCode: null, blockCode: null, updatedAt: now(), version: 1 });
-      const ma: MeetingAttachment = { attachmentId: id(14, ++meetingAttachSeq), meetingId, documentId, createdAt: now() };
+      const ma: MeetingAttachment = { attachmentId: id(14, ++meetingAttachSeq), meetingId, documentId, createdAt: now(), createdAtMs: Date.now() };
       meetingAttachments.push(ma);
       return toMeetingAttachmentResponse(ma, d, me.userId);
     })();
@@ -365,7 +406,7 @@ export function routeDocument(o: RequestOptions, me: MockUser): unknown | Promis
       if (!access.hasAccess) return fail(403, "MEETING_ATTACHMENT_FORBIDDEN");
       if (!access.controlOpen) return fail(409, "MEETING_EVIDENCE_FROZEN");
       let ma = meetingAttachments.find(x => x.meetingId === meetingId && x.documentId === doc.documentId);
-      if (!ma) { ma = { attachmentId: id(14, ++meetingAttachSeq), meetingId, documentId: doc.documentId, createdAt: now() }; meetingAttachments.push(ma); }
+      if (!ma) { ma = { attachmentId: id(14, ++meetingAttachSeq), meetingId, documentId: doc.documentId, createdAt: now(), createdAtMs: Date.now() }; meetingAttachments.push(ma); }
       return toMeetingAttachmentResponse(ma, doc, me.userId);
     }
     requireEditor(doc, me.userId);
@@ -454,12 +495,46 @@ export function downloadResponse(path: string, token: string | null): Response {
       if (v.versionId !== doc.currentVersionId && r.permission !== "OWNER" && r.permission !== "EDITOR") return errorResponse(403, "DOCUMENT_VERSION_HISTORY_FORBIDDEN");
       return fileResponse(v);
     }
+    // 원본 녹음 합본 MP3(FRONTEND_03). 실제는 미팅 서비스가 사람별 조각을 합성한다. mock은 짧은 무음 MP3 프레임을 돌려준다(파일 크기는 Content-Length로 알린다).
+    m = /^\/api\/meetings\/([^/]+)\/recording\/download$/.exec(path);
+    if (m) {
+      const info = recordingInfo(m[1], me.userId);
+      if (info.kind === "notfound") return errorResponse(404, "MEETING_NOT_FOUND");
+      if (info.kind === "forbidden") return errorResponse(403, "RECORDING_DOWNLOAD_FORBIDDEN");
+      if (info.state === "NOT_READY") return errorResponse(409, "RECORDING_NOT_READY");
+      if (info.state === "UNAVAILABLE") return errorResponse(404, "RECORDING_UNAVAILABLE");
+      const bytes = mockMp3Bytes();
+      const safe = info.title.replace(/[\\/:*?"<>|\x00-\x1f]/g, " ").slice(0, 80);
+      const cd = `attachment; filename="meeting-recording.mp3"; filename*=UTF-8''${encodeURIComponent(`${safe}_녹음.mp3`)}`;
+      return new Response(bytes as BlobPart, { status: 200, headers: { "Content-Type": "audio/mpeg", "Content-Length": String(bytes.length), "Content-Disposition": cd, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Request-Id": crypto.randomUUID() } });
+    }
+    // 양식 위에 값을 채운 보고서 파일(양식과 같은 종류). 실제는 미팅 서비스가 만든다. mock은 양식 종류에 맞는 작은 유효한 파일을 돌려준다.
+    m = /^\/api\/meetings\/([^/]+)\/custom-report\/file$/.exec(path);
+    if (m) {
+      const tpl = getMeetingTemplateFile(m[1]);
+      if (!tpl) return errorResponse(404, "CUSTOM_REPORT_NOT_FOUND");
+      const base = tpl.filename.replace(/\.[^.]+$/, "");
+      const cd = `attachment; filename="meeting-report.${tpl.mimeType === "application/pdf" ? "pdf" : "docx"}"; filename*=UTF-8''${encodeURIComponent(`${base}_보고서.${tpl.mimeType === "application/pdf" ? "pdf" : "docx"}`)}`;
+      const h = { "Content-Disposition": cd, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Request-Id": crypto.randomUUID() };
+      if (tpl.mimeType === "application/pdf") return new Response(MOCK_PDF, { status: 200, headers: { ...h, "Content-Type": "application/pdf", "x-report-pdf-unplaced": "0", "x-report-pdf-cut": "0" } });
+      if (tpl.mimeType === DOCX_MIME) return new Response(reportDocxBytes({ title: `${base} (mock)` }, []) as BlobPart, { status: 200, headers: { ...h, "Content-Type": DOCX_MIME } });
+      return errorResponse(409, "REPORT_FORM_NOT_PDF"); // PNG·JPG 양식은 파일로 내려받을 수 없다
+    }
     return errorResponse(404, "NOT_FOUND");
   } catch (e) {
     if (e instanceof ApiError) return errorResponse(e.status, e.errorCode);
     throw e;
   }
 }
+// MPEG-1 Layer III 프레임(128kbps, 44.1kHz, 417바이트)을 이어 붙인 약 0.5초의 무음. mock 전용.
+function mockMp3Bytes(): Uint8Array {
+  const frame = new Uint8Array(417); frame.set([0xff, 0xfb, 0x90, 0x64]);
+  const out = new Uint8Array(417 * 20);
+  for (let i = 0; i < 20; i++) out.set(frame, i * 417);
+  return out;
+}
+// 한 페이지짜리 최소 PDF(영문 한 줄). mock 전용.
+const MOCK_PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 100]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 14 Tf 20 50 Td (MOCK REPORT FILE) Tj ET\nendstream\nendobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R/Size 6>>\n%%EOF";
 function fileResponse(v: Version): Response {
   return new Response(v.blob, { status: 200, headers: { "Content-Type": v.detectedMimeType, "Content-Disposition": `attachment; filename="${encodeURIComponent(v.originalFilename)}"`, "X-Content-Type-Options": "nosniff", "X-Request-Id": crypto.randomUUID() } });
 }

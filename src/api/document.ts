@@ -32,9 +32,12 @@ export type DocumentVersionResponse = Omit<DocumentVersionWire, "current"> & { i
 const toVersion = ({ current, ...v }: DocumentVersionWire): DocumentVersionResponse => ({ ...v, isCurrent: current });
 export interface DocumentPermissionResponse { userId: Uuid; permission: AclPermission; status: AclStatus; createdByUserId: Uuid; createdAt: Rfc3339; updatedAt: Rfc3339; version: number }
 export interface DocumentProjectAttachmentResponse { attachmentId: Uuid; documentId: Uuid; projectId: Uuid; createdAt: Rfc3339 }
+// processingStatus: AI가 읽을 수 있게 글자를 뽑는 처리 상태. READY만 AI 근거로 쓰인다. 항상 온다.
+// processingFailureCode: FAILED일 때만 오고, 아니면 키 자체가 없다. NOT_SUPPORTED(이미지·오디오·Excel 등)·PARSER_ERROR·AI_JOB_SOURCE_UNAVAILABLE·AI_JOB_RETRY_EXHAUSTED.
 export interface MeetingAttachmentResponse {
   attachmentId: Uuid; meetingId: Uuid; documentId: Uuid; title: string; ownerUserId: Uuid; currentVersionId: Uuid;
   originalFilename: string; sizeBytes: number; detectedMimeType: string; effectivePermission: EffectivePermission; createdAt: Rfc3339;
+  processingStatus?: DocumentProcessingStatus; processingFailureCode?: string | null;
 }
 export interface DocumentProcessingResponse {
   documentId: Uuid; documentVersionId: Uuid; status: DocumentProcessingStatus; processingGeneration: number;
@@ -52,6 +55,21 @@ function uploadForm(file: File, metadata: Record<string, unknown>): FormData {
   fd.append("metadata", new Blob([JSON.stringify(clean)], { type: "application/json" }));
   fd.append("file", file);
   return fd;
+}
+
+// 업로드 전에 프론트에서 먼저 거른다(⑥⑦ 체크리스트). 50MB 초과나 너무 긴 파일 이름은 서버가 413 FILE_TOO_LARGE로 돌려준다.
+export const UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+export const UPLOAD_MAX_FILENAME = 100;
+export const UPLOAD_MAX_TITLE = 160;
+const BLOCKED_UPLOAD_EXT = [".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".exe", ".sh", ".bat", ".cmd", ".msi", ".dll", ".jar", ".apk"];
+/** 올릴 수 없는 파일이면 사용자에게 보여 줄 사유를, 괜찮으면 null을 돌려준다. */
+export function validateUploadFile(file: File): string | null {
+  if (file.size === 0) return "빈 파일은 올릴 수 없습니다.";
+  if (file.size > UPLOAD_MAX_BYTES) return "파일은 50MB 이하여야 합니다.";
+  if (file.name.length > UPLOAD_MAX_FILENAME) return `파일 이름이 너무 깁니다. (${UPLOAD_MAX_FILENAME}자 이내로 바꿔 주세요)`;
+  const lower = file.name.toLowerCase();
+  if (BLOCKED_UPLOAD_EXT.some(ext => lower.endsWith(ext))) return "압축 파일과 실행 파일은 올릴 수 없습니다.";
+  return null;
 }
 
 // ── Documents ────────────────────────────────────────────────────
@@ -123,6 +141,24 @@ export const attachExistingDocumentToMeeting = (meetingId: Uuid, documentId: Uui
 
 export const detachMeetingAttachment = (meetingId: Uuid, documentId: Uuid) =>
   request({ method: "DELETE", path: `/api/meetings/${meetingId}/attachments/${documentId}`, ...auth });
+
+// ── Meeting minutes template (회사 양식, 검토 담당자 전용) ──────
+// PNG·JPG·PDF, 그리고 문서 서비스의 MINUTES_TEMPLATE_DOCX_ENABLED가 켜져 있을 때 Word(.docx). 10MiB 이하.
+// multipart에는 `file` 파트만 보낸다(metadata 파트·Idempotency-Key 없음). 내용으로 형식을 판별하므로 확장자만 바꾼 파일은 거절된다.
+// 같은 내용을 다시 올리면 같은 templateId를 돌려준다. 업로드만으로는 분석이 시작되지 않는다(requestMeetingCustomReport 때 시작).
+// .docx가 꺼진 서버는 400 FILE_TYPE_NOT_ALLOWED로 거절하므로 화면에서 미리 막지 않고 서버 응답을 문구로 안내한다.
+export const MINUTES_TEMPLATE_MAX_BYTES = 10 * 1024 * 1024;
+export const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const MINUTES_TEMPLATE_ACCEPT = `image/png,image/jpeg,application/pdf,${DOCX_MIME},.docx`;
+export interface MeetingMinutesTemplateResponse {
+  templateId: Uuid; meetingId: Uuid; filename: string; mimeType: "image/png" | "image/jpeg" | "application/pdf" | typeof DOCX_MIME;
+  sizeBytes: number; sha256: string; uploadedAt: Rfc3339;
+}
+export const uploadMeetingMinutesTemplate = (meetingId: Uuid, file: File) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return request<MeetingMinutesTemplateResponse>({ method: "PUT", path: `/api/meetings/${meetingId}/minutes-template`, body: fd, ...auth });
+};
 
 // ── Processing ───────────────────────────────────────────────────
 export const getDocumentProcessing = (documentId: Uuid) =>

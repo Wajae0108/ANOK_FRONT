@@ -7,6 +7,14 @@ import * as prj from "../src/api/project";
 import { tokenStore } from "../src/api/tokenStore";
 import { code, createScenario, loginAdmin, loginAs, loginSmart, sleep, userIdByEmailAdmin } from "./helpers";
 
+// 회의록 초안(REVIEWING/MINUTES_DRAFT)이 나와도 후보는 몇 초 뒤에 생긴다 — page.total이 0보다 커질 때까지 읽는다(명세 10-1).
+async function waitCandidates(meetingId: string, timeoutMs = 8000) {
+  const t0 = Date.now();
+  let page = await mtg.listMeetingCandidates(meetingId, { limit: 100 });
+  while (page.page.total === 0 && Date.now() - t0 < timeoutMs) { await sleep(300); page = await mtg.listMeetingCandidates(meetingId, { limit: 100 }); }
+  return page;
+}
+
 describe("Meeting(04) 시나리오", () => {
   it("회의 생명주기/채팅/후처리/회의록/후보 확정/참가자/민감도/관리자 복구가 명세대로 동작한다", async () => {
     const scenario = createScenario();
@@ -63,7 +71,7 @@ describe("Meeting(04) 시나리오", () => {
 
     // ── 종료 → postprocess 파이프라인 ──
     const ended = await mtg.endMeeting(created.meetingId);
-    ok("종료 → ENDED + postprocess 시작", ended.meeting.status === "ENDED" && ended.postprocess.status === "WAITING_EVIDENCE_SNAPSHOT");
+    ok("종료 → ENDED + postprocess 시작", ended.meeting.status === "ENDED" && ended.postprocess?.status === "WAITING_EVIDENCE_SNAPSHOT");
     ok("종료된 회의에 채팅 불가", (await code(mtg.sendChatMessage(created.meetingId, "x"))) === "409 MEETING_CHAT_CLOSED");
 
     let pp = await mtg.getMeetingPostprocess(created.meetingId);
@@ -74,13 +82,14 @@ describe("Meeting(04) 시나리오", () => {
     const draftMinutes = await mtg.getMeetingMinutes(created.meetingId);
     ok("초안 회의록 생성(채팅 내용 반영)", draftMinutes.status === "DRAFT" && draftMinutes.content!.includes("안녕하세요"));
 
-    const draftCandidates = await mtg.listMeetingCandidates(created.meetingId);
+    const immediate = await mtg.listMeetingCandidates(created.meetingId);
+    ok("회의록 초안 직후에는 후보가 아직 0건일 수 있다(후보는 몇 초 뒤)", immediate.page.total === 0);
+    const draftCandidates = await waitCandidates(created.meetingId);
     ok("결정/업무 후보 2건 자동 생성", draftCandidates.page.total === 2 && draftCandidates.items.some((c: any) => c.type === "DECISION") && draftCandidates.items.some((c: any) => c.type === "TASK"));
-    const decisionCand = draftCandidates.items.find((c: any) => c.type === "DECISION")!;
-    const taskCand = draftCandidates.items.find((c: any) => c.type === "TASK")!;
+    const decisionDraft = draftCandidates.items.find((c: any) => c.type === "DECISION")!;
 
     // ── 승인 전에는 confirm 불가 ──
-    ok("회의록 승인 전 후보 확정 불가", (await code(mtg.confirmMeetingCandidate(created.meetingId, decisionCand.candidateId, decisionCand.version))) === "409 MINUTES_NOT_APPROVED");
+    ok("회의록 승인 전 후보 확정 불가", (await code(mtg.confirmMeetingCandidate(created.meetingId, decisionDraft.candidateId, decisionDraft.version))) === "409 MINUTES_NOT_APPROVED");
 
     await loginAs("gyuchan@anok.io");
     ok("reviewOwner 아니면 회의록 수정/승인 불가", (await code(mtg.approveMeetingMinutes(created.meetingId, draftMinutes.version))) === "403 REVIEW_OWNER_REQUIRED");
@@ -92,6 +101,13 @@ describe("Meeting(04) 시나리오", () => {
     const approved = await mtg.approveMeetingMinutes(created.meetingId, editedMinutes.version);
     ok("회의록 승인", approved.status === "APPROVED" && !!approved.approvedAt);
     ok("이미 승인된 회의록 재승인 불가", (await code(mtg.approveMeetingMinutes(created.meetingId, approved.version))) === "409 MINUTES_NOT_DRAFT");
+
+    // 회의록 본문이 바뀌면 후보가 새로 만들어진다(손본 후보도 사라진다). 승인 뒤에 새 후보를 읽는다.
+    ok("회의록 본문이 바뀌면 이전 후보는 사라진다", (await code(mtg.updateMeetingCandidate(created.meetingId, decisionDraft.candidateId, { title: decisionDraft.title, descriptionOrContent: "x", version: decisionDraft.version }))) === "404 CANDIDATE_NOT_FOUND");
+    const regenCandidates = await waitCandidates(created.meetingId);
+    ok("새 후보가 뒤늦게 2건 생성", regenCandidates.page.total === 2);
+    const decisionCand = regenCandidates.items.find((c: any) => c.type === "DECISION")!;
+    const taskCand = regenCandidates.items.find((c: any) => c.type === "TASK")!;
 
     // ── 후보 편집 → 확정 → materialize ──
     const editedTask = await mtg.updateMeetingCandidate(created.meetingId, taskCand.candidateId, { title: "회고 후속 조치: 액션 아이템 정리", assigneeUserId: gyuchanId, version: taskCand.version });
@@ -144,7 +160,7 @@ describe("Meeting(04) 시나리오", () => {
     while (ppRace.status !== "MINUTES_DRAFT" && Date.now() - tRace0 < 15000) { await sleep(400); ppRace = await mtg.getMeetingPostprocess(raceMeeting.meetingId); }
     const raceMinutes = await mtg.getMeetingMinutes(raceMeeting.meetingId);
     await mtg.approveMeetingMinutes(raceMeeting.meetingId, raceMinutes.version);
-    const raceTaskSeed = (await mtg.listMeetingCandidates(raceMeeting.meetingId)).items.find((c: any) => c.type === "TASK")!;
+    const raceTaskSeed = (await waitCandidates(raceMeeting.meetingId)).items.find((c: any) => c.type === "TASK")!;
     const raceTaskAssigned = await mtg.updateMeetingCandidate(raceMeeting.meetingId, raceTaskSeed.candidateId, { title: raceTaskSeed.title, assigneeUserId: minjunId, version: raceTaskSeed.version });
     const raceConfirmed = await mtg.confirmMeetingCandidate(raceMeeting.meetingId, raceTaskAssigned.candidateId, raceTaskAssigned.version);
     const raceMaterializing = await mtg.materializeMeetingCandidate(raceMeeting.meetingId, raceConfirmed.candidateId, raceConfirmed.version);
@@ -169,9 +185,7 @@ describe("Meeting(04) 시나리오", () => {
     const minjunPart = parts.items.find((p: any) => p.userId === minjunId);
     ok("종료된 회의에는 참가자 추가 불가", (await code(mtg.addMeetingParticipant(created.meetingId, jihyunId))) === "409 MEETING_NOT_SCHEDULED");
     ok("organizer 본인 제거 금지", (await code(mtg.removeMeetingParticipant(created.meetingId, wonjaeId))) === "409 ORGANIZER_REMOVE_FORBIDDEN");
-    await mtg.removeMeetingParticipant(created.meetingId, minjunId);
-    const partsAfter = await mtg.listMeetingParticipants(created.meetingId);
-    ok("참가자 제거 반영", partsAfter.items.find((p: any) => p.userId === minjunId)!.participationStatus === "REMOVED");
+    ok("종료된 회의에서는 참가자를 제거할 수 없다", (await code(mtg.removeMeetingParticipant(created.meetingId, minjunId))) === "409 MEETING_STATE_NOT_MUTABLE");
 
     const revoked = await mtg.updateMeetingRecordAccess(created.meetingId, gyuchanId, { state: "REVOKED", reason: "보안 검토", version: parts.items.find((p: any) => p.userId === gyuchanId)!.version });
     ok("기록 접근 회수", revoked.recordAccessState === "REVOKED");
@@ -180,6 +194,13 @@ describe("Meeting(04) 시나리오", () => {
 
     // ── 조직자 이전 (새 SCHEDULED 회의로 테스트) ──
     const created2 = await mtg.createMeeting({ projectId: aiProject.projectId, title: "설계 리뷰", participantUserIds: [gyuchanId] });
+    await mtg.addMeetingParticipant(created2.meetingId, minjunId);
+    await mtg.removeMeetingParticipant(created2.meetingId, minjunId);
+    const partsAfter = await mtg.listMeetingParticipants(created2.meetingId);
+    const removedMinjun = partsAfter.items.find((p: any) => p.userId === minjunId)!;
+    ok("참가자 제거 반영: 참여 REMOVED + 기록 접근권도 함께 회수", removedMinjun.participationStatus === "REMOVED" && removedMinjun.recordAccessState === "REVOKED");
+    ok("한 번 제거된 사람은 다시 추가할 수 없다", (await code(mtg.addMeetingParticipant(created2.meetingId, minjunId))) === "409 PARTICIPANT_ALREADY_EXISTS");
+    ok("제거된 사람은 주최자로 지정할 수 없다", (await code(mtg.transferMeetingOrganizer(created2.meetingId, { targetUserId: minjunId, version: created2.version }))) === "409 PARTICIPANT_ALREADY_REMOVED");
     await mtg.setMeetingPassword(created2.meetingId, { password: "sprint2026", version: created2.version });
     const withPassword = await mtg.getMeeting(created2.meetingId);
     await mtg.transferMeetingOrganizer(created2.meetingId, { targetUserId: gyuchanId, version: withPassword.version });
@@ -212,7 +233,12 @@ describe("Meeting(04) 시나리오", () => {
     ok("승인된 회의록은 재생성 금지", (await code(mtg.regenerateMeetingMinutes(created.meetingId))) === "409 MINUTES_APPROVED");
     ok("실패 상태 아니면 재시도 불가", (await code(mtg.retryMeetingPostprocess(created.meetingId))) === "409 POSTPROCESS_NOT_RETRYABLE");
     const regenerated = await mtg.regenerateMeetingMinutes(endedSeed.meetingId);
-    ok("미승인 회의록은 재생성 가능(초안 다시 생성)", regenerated.status === "MINUTES_DRAFT");
+    ok("미승인 회의록은 재생성 가능: 즉시 MINUTES_QUEUED, 회의록은 PROCESSING(content null)", regenerated.status === "MINUTES_QUEUED" && (await mtg.getMeetingMinutes(endedSeed.meetingId)).status === "PROCESSING");
+    ok("생성 중에 또 재생성하면 409", (await code(mtg.regenerateMeetingMinutes(endedSeed.meetingId))) === "409 MINUTES_REGENERATION_NOT_ALLOWED");
+    let ppRegen = await mtg.getMeetingPostprocess(endedSeed.meetingId);
+    const tRegen = Date.now();
+    while (ppRegen.status !== "MINUTES_DRAFT" && Date.now() - tRegen < 8000) { await sleep(300); ppRegen = await mtg.getMeetingPostprocess(endedSeed.meetingId); }
+    ok("재생성이 끝나면 초안으로 돌아온다", ppRegen.status === "MINUTES_DRAFT" && (await mtg.getMeetingMinutes(endedSeed.meetingId)).status === "DRAFT");
 
     // ── 관리자 복구/설정 (화면 없음 — API 계약만 검증) ──
     await loginAdmin("insung@anok.io");

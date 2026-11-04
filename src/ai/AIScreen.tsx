@@ -27,12 +27,12 @@ const AiIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
 const SourceIcon = () => <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const SendIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
 
-export default function AIScreen() {
+export default function AIScreen({ initialQuestion }: { initialQuestion?: string }) {
   const { data: projectPage, loading: loadingProjects } = useLoad(() => prj.listProjects({ status: "ACTIVE", limit: 100 }), []);
   const [projectId, setProjectId] = useState("");
   const [conv, setConv] = useState<ConversationSummaryResponse | null>(null);
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialQuestion ?? "");
   const [busy, setBusy] = useState(false);
   const [loadingConv, setLoadingConv] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);

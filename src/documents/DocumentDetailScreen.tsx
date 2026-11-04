@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import * as api from "../api/document";
 import type { AclPermission, DocumentPermissionResponse, DocumentResponse, DocumentVersionResponse, ExternalAiPolicy, SensitivityClassification } from "../api/document";
-import { errorText, fieldErrorMap } from "../api/errors";
+import { ApiError, errorText, fieldErrorMap } from "../api/errors";
 import * as projectApi from "../api/project";
 import { useOrgUsers } from "../projects/shared";
 import { Card, ErrorBox, Field, ghostBtn, inputCls, labelCls, Modal, primaryBtn, Section, Spinner, useLoad } from "../ui/kit";
@@ -236,38 +236,61 @@ function PermissionsTab({ doc }: { doc: DocumentResponse }) {
 }
 
 // ───────────────────────── 프로젝트 연결 ─────────────────────────
+// "이 문서가 어느 프로젝트에 붙어 있는지"를 조회하는 API가 없다(⑦ 1절). 프론트가 연결·해제할 때 브라우저에 기록해 두고 보여 준다 —
+// 다른 기기나 다른 사람이 바꾼 연결은 반영되지 않는다. 저장소를 못 쓰는 환경(사생활 보호 모드 등)에서는 이번 화면에서 한 것만 보인다.
+type AttachedProject = { projectId: string; name: string };
+const attachedKey = (documentId: string) => `anok.docProjects.${documentId}`;
+function loadAttached(documentId: string): AttachedProject[] {
+  try { const v = JSON.parse(localStorage.getItem(attachedKey(documentId)) ?? "[]"); return Array.isArray(v) ? v.filter(x => x && typeof x.projectId === "string") : []; } catch { return []; }
+}
+function saveAttached(documentId: string, list: AttachedProject[]) {
+  try { localStorage.setItem(attachedKey(documentId), JSON.stringify(list)); } catch { /* 저장 실패는 화면 동작에 영향 없다 */ }
+}
+
 function ProjectAttachmentsTab({ doc, isOwner }: { doc: DocumentResponse; isOwner: boolean }) {
   const myProjects = useLoad(() => projectApi.listProjects({ limit: 100 }), []);
   const [projectId, setProjectId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [attached, setAttached] = useState<{ projectId: string; name: string }[]>([]);
-  const managerProjects = (myProjects.data?.items ?? []).filter(p => p.myRole === "MANAGER" && !attached.some(a => a.projectId === p.projectId));
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [attached, setAttached] = useState<AttachedProject[]>(() => loadAttached(doc.documentId));
+  const update = (next: AttachedProject[]) => { setAttached(next); saveAttached(doc.documentId, next); };
+  const nameOfProject = (id: string) => myProjects.data?.items.find(x => x.projectId === id)?.name ?? attached.find(a => a.projectId === id)?.name ?? id;
+  // 연결은 문서 소유자이면서 프로젝트의 담당자(MANAGER)·멤버(MEMBER)일 때, 프로젝트가 진행 중(ACTIVE)일 때만 된다. 열람 전용(VIEWER)은 403이다.
+  const choices = (myProjects.data?.items ?? []).filter(p => p.status === "ACTIVE" && (p.myRole === "MANAGER" || p.myRole === "MEMBER") && !attached.some(a => a.projectId === p.projectId));
+  const archived = doc.status === "ARCHIVED";
 
   async function attach() {
     if (!projectId) return;
     setBusy("attach"); setMsg(null);
     try {
       await api.attachDocumentToProject(doc.documentId, projectId);
-      const p = myProjects.data?.items.find(x => x.projectId === projectId);
-      setAttached(a => [...a, { projectId, name: p?.name ?? projectId }]); setProjectId("");
-    } catch (e) { setMsg(errorText(e)); } finally { setBusy(null); }
+      update([...attached, { projectId, name: nameOfProject(projectId) }]); setProjectId("");
+      setMsg({ ok: true, text: "연결했습니다. 그 프로젝트의 구성원이 이 문서를 읽을 수 있습니다." });
+    } catch (e) {
+      // 이미 연결된 문서는 오류가 아니라 "이미 연결됨"으로 처리한다.
+      if (e instanceof ApiError && e.errorCode === "PROJECT_ATTACHMENT_ALREADY_EXISTS") { update([...attached, { projectId, name: nameOfProject(projectId) }]); setProjectId(""); setMsg({ ok: true, text: "이미 연결된 프로젝트입니다." }); }
+      else setMsg({ ok: false, text: errorText(e) });
+    } finally { setBusy(null); }
   }
   async function detach(pid: string) {
     setBusy(pid); setMsg(null);
-    try { await api.detachDocumentFromProject(doc.documentId, pid); setAttached(a => a.filter(x => x.projectId !== pid)); }
-    catch (e) { setMsg(errorText(e)); } finally { setBusy(null); }
+    try { await api.detachDocumentFromProject(doc.documentId, pid); update(attached.filter(x => x.projectId !== pid)); }
+    catch (e) {
+      // 이미 떨어져 있거나 없는 연결이면 기록에서도 지운다.
+      if (e instanceof ApiError && e.errorCode === "PROJECT_ATTACHMENT_NOT_FOUND") update(attached.filter(x => x.projectId !== pid));
+      setMsg({ ok: false, text: errorText(e) });
+    } finally { setBusy(null); }
   }
 
   return (
     <div className="max-w-2xl space-y-4">
       <Card className="p-5 space-y-2">
         <Section>연결된 프로젝트</Section>
-        <p className="text-[11px] text-slate-400">프로젝트에 연결하면 해당 프로젝트 구성원 전체가 자동으로 열람자 권한을 받습니다.</p>
-        {attached.length === 0 && <p className="text-[13px] text-slate-400 py-4 text-center">이 세션에서 연결한 프로젝트가 없습니다. (프로젝트 연결 목록 조회 API가 없어 이번에 연결/해제한 것만 표시됩니다.)</p>}
+        <p className="text-[11px] text-slate-400">프로젝트에 연결하면 그 프로젝트 구성원(열람 전용 포함)이 이 문서를 <b>읽을 수만</b> 있습니다. 구성원이 프로젝트에서 빠지면 읽기 권한도 함께 사라집니다. 연결을 해제하려면 프로젝트가 진행 중이어야 합니다.</p>
+        {attached.length === 0 && <p className="text-[13px] text-slate-400 py-4 text-center">이 브라우저에서 연결한 프로젝트가 없습니다. (연결 목록을 조회하는 API가 없어, 이 브라우저에서 연결·해제한 것만 표시됩니다.)</p>}
         {attached.map(a => (
           <div key={a.projectId} className="flex items-center gap-3 py-2 border-b border-slate-50 last:border-0">
-            <p className="flex-1 text-[13px] font-semibold text-slate-800">{a.name}</p>
+            <p className="flex-1 text-[13px] font-semibold text-slate-800">{nameOfProject(a.projectId)}</p>
             {isOwner && <button disabled={busy === a.projectId} onClick={() => detach(a.projectId)} className="text-[11px] text-rose-500 font-semibold hover:bg-rose-50 px-2 py-1 rounded-lg disabled:opacity-40">연결 해제</button>}
           </div>
         ))}
@@ -275,17 +298,19 @@ function ProjectAttachmentsTab({ doc, isOwner }: { doc: DocumentResponse; isOwne
       {isOwner && (
         <Card className="p-5 space-y-2">
           <Section>새로 연결</Section>
-          <p className="text-[11px] text-slate-400">내가 담당자(MANAGER)인 프로젝트에만 연결할 수 있습니다.</p>
-          <div className="flex gap-2">
-            <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputCls}>
-              <option value="">프로젝트 선택</option>
-              {managerProjects.map(p => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
-            </select>
-            <button disabled={busy === "attach" || !projectId} onClick={attach} className={ghostBtn}>연결</button>
-          </div>
+          <p className="text-[11px] text-slate-400">내가 담당자 또는 멤버인 진행 중 프로젝트에만 연결할 수 있습니다. 이렇게 연결한 문서는 AI가 자동으로 읽지 않습니다.</p>
+          {archived ? <p className="text-[12px] text-amber-600">보관된 문서는 프로젝트에 연결하거나 해제할 수 없습니다.</p> : (
+            <div className="flex gap-2">
+              <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputCls}>
+                <option value="">프로젝트 선택</option>
+                {choices.map(p => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
+              </select>
+              <button disabled={busy === "attach" || !projectId} onClick={attach} className={ghostBtn}>연결</button>
+            </div>
+          )}
         </Card>
       )}
-      {msg && <p className="text-[12px] text-rose-500 font-medium">{msg}</p>}
+      {msg && <p className={`text-[12px] font-medium ${msg.ok ? "text-emerald-600" : "text-rose-500"}`}>{msg.text}</p>}
     </div>
   );
 }
