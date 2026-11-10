@@ -1,4 +1,5 @@
 {
+  "title": "Anok",
   "description": "Engage with an intuitive web bot that utilizes GPT technology to provide instant responses and support, enhancing user interaction and efficiency.",
   "robots": {
     "index": false
