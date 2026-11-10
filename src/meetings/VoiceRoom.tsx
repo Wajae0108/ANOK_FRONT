@@ -104,7 +104,12 @@ export default function VoiceRoom({ m, token, myUserId, participants, nameOf, ch
     if (USE_MOCK) return;
     if (!LIVEKIT_URL) { setConn("failed"); setConnError("VITE_LIVEKIT_URL이 설정되지 않았습니다."); return; }
     setConn("connecting"); setConnError(null);
-    const room = new Room({ adaptiveStream: false, dynacast: false });
+    // 음성 분리(voiceIsolation)는 LiveKit 기본값이 true라 켜져 있었다. 녹음에 잡음이 끼는 원인 후보라 끄고 비교한다(나머지 처리는 유지).
+    const room = new Room({
+      adaptiveStream: false,
+      dynacast: false,
+      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceIsolation: false },
+    });
     roomRef.current = room;
     let alive = true;
     const syncOnline = () => setOnlineIds(new Set([room.localParticipant.identity, ...Array.from(room.remoteParticipants.values(), p => p.identity)].map(userIdOf)));
