@@ -2,7 +2,7 @@
 // 서버가 발급하는 토큰은 오디오 발행·구독만 허용하므로 카메라·화면 공유는 제공하지 않는다. 토큰 수명은 5분이라 방에 들어가는 순간에만 쓰고,
 // 끊겼다 다시 접속할 때는 새 토큰을 받는다(onRejoin). mock 모드(VITE_API_BASE_URL 없음)는 토큰이 가짜라 LiveKit에 접속하지 않고 로컬 음량 감지만 한다.
 import { useEffect, useRef, useState } from "react";
-import { ConnectionState, Room, RoomEvent, Track } from "livekit-client";
+import { ConnectionState, Room, RoomEvent, Track, type RoomOptions } from "livekit-client";
 import { USE_MOCK } from "../api/config";
 import type { MeetingParticipantResponse, MeetingResponse } from "../api/meeting";
 import { Avatar } from "../ui/kit";
@@ -11,6 +11,19 @@ import type { MeetingChat } from "./useMeetingChat";
 
 const LIVEKIT_URL = (import.meta.env.VITE_LIVEKIT_URL as string | undefined) ?? "";
 const PARTICIPANT_IDENTITY_PREFIX = "anok-user:"; // meeting-service의 participantIdentity 규칙(`anok-user:<userId>`)
+// 잡음("쉬~") 대응 — 원인 후보를 한 단계씩 바꿔 비교한다. 단계를 넘길 때는 앞 단계 설정을 유지한 채 다음 줄만 바꾼다.
+//  1) dtx: false (현재) — DTX가 켜져 있으면 말하지 않는 구간의 전송이 끊기고, 받는 쪽 Chrome이 그 빈 구간을 보내는 쪽 배경 잡음과
+//     비슷한 소리(comfort noise)로 채운다. 녹음 서버는 이 구간을 무음으로 처리해 녹음은 깨끗했고, 봇은 무음을 그대로 보내 들리지 않았다.
+//     끄면 무음 구간도 계속 전송한다(음성 1인당 초당 수 KB 수준).
+//  2) 그래도 남으면 red: false
+//  3) 그래도 남으면 audioCaptureDefaults의 noiseSuppression, voiceIsolation
+// 라이브러리 기본값(livekit-client 2.22.3): dtx·red는 모노 트랙에서 true, voiceIsolation은 true(여기서 false로 끔).
+export const VOICE_ROOM_OPTIONS: RoomOptions = {
+  adaptiveStream: false,
+  dynacast: false,
+  audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceIsolation: false },
+  publishDefaults: { dtx: false, red: true },
+};
 const userIdOf = (identity: string) => identity.startsWith(PARTICIPANT_IDENTITY_PREFIX) ? identity.slice(PARTICIPANT_IDENTITY_PREFIX.length) : identity;
 
 function MicIcon({ on }: { on: boolean }) {
@@ -104,12 +117,7 @@ export default function VoiceRoom({ m, token, myUserId, participants, nameOf, ch
     if (USE_MOCK) return;
     if (!LIVEKIT_URL) { setConn("failed"); setConnError("VITE_LIVEKIT_URL이 설정되지 않았습니다."); return; }
     setConn("connecting"); setConnError(null);
-    // 음성 분리(voiceIsolation)는 LiveKit 기본값이 true라 켜져 있었다. 녹음에 잡음이 끼는 원인 후보라 끄고 비교한다(나머지 처리는 유지).
-    const room = new Room({
-      adaptiveStream: false,
-      dynacast: false,
-      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceIsolation: false },
-    });
+    const room = new Room(VOICE_ROOM_OPTIONS);
     roomRef.current = room;
     let alive = true;
     const syncOnline = () => setOnlineIds(new Set([room.localParticipant.identity, ...Array.from(room.remoteParticipants.values(), p => p.identity)].map(userIdOf)));
