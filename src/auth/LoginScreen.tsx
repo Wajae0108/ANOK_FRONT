@@ -24,13 +24,25 @@ type Mode =
   | { k: "verify" }
   | { k: "regcomplete"; challengeToken: string };
 
-// 회사 가입 인증 메일의 링크: https://anok.space/auth/verify-email?token=...
-// 이 경로로 들어오면 토큰을 꺼내 인증 API(POST)를 자동 호출한다. 링크를 여는 GET 자체는 토큰을 소모하지 않는다.
-const VERIFY_LINK_PATH = "/auth/verify-email";
-function readVerifyLinkToken(): string | null {
-  if (window.location.pathname.replace(/\/+$/, "") !== VERIFY_LINK_PATH) return null;
-  return new URLSearchParams(window.location.search).get("token")?.trim() || null;
+// 메일 링크(https://anok.space/<경로>?token=...)로 들어온 경우 해당 화면을 연다. 링크를 여는 GET 자체는 토큰을 소모하지 않는다.
+//  · /auth/verify-email       회사 가입 이메일 인증 → 인증 API(POST)를 자동 호출
+//  · /auth/invitations/accept 직원 초대 수락       → 토큰을 채운 초대 수락 화면(이름·비밀번호 입력 필요)
+//  · /auth/reset-password     비밀번호 재설정       → 토큰을 채운 새 비밀번호 화면
+type EmailLinkKind = "verify" | "accept" | "reset";
+const EMAIL_LINK_PATHS: Record<string, EmailLinkKind> = {
+  "/auth/verify-email": "verify",
+  "/auth/invitations/accept": "accept",
+  "/auth/reset-password": "reset",
+};
+function readEmailLink(): { kind: EmailLinkKind; token: string } | null {
+  const kind = EMAIL_LINK_PATHS[window.location.pathname.replace(/\/+$/, "")];
+  const token = new URLSearchParams(window.location.search).get("token")?.trim();
+  return kind && token ? { kind, token } : null;
 }
+const EMAIL_LINK_NOTICE: Record<Exclude<EmailLinkKind, "verify">, string> = {
+  accept: "초대를 수락하려면 이름과 비밀번호를 입력해 주세요.",
+  reset: "새 비밀번호를 입력해 주세요.",
+};
 
 function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
   return (
@@ -47,17 +59,17 @@ const linkCls = "text-[12px] text-indigo-500 hover:text-indigo-700 font-semibold
 
 export default function LoginScreen() {
   const { establish, sessionExpired, passwordChanged } = useAuth();
-  const [linkToken] = useState(readVerifyLinkToken);
-  const [mode, setMode] = useState<Mode>(() => (linkToken ? { k: "verify" } : { k: "login" }));
+  const [link] = useState(readEmailLink);
+  const [mode, setMode] = useState<Mode>(() => (link ? { k: link.kind } : { k: "login" }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(() => (link && link.kind !== "verify" ? EMAIL_LINK_NOTICE[link.kind] : null));
   const [fields, setFields] = useState<Record<string, string>>({});
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
-  const [f, setF] = useState({ token: "", fullName: "", displayName: "", password: "" });
+  const [f, setF] = useState(() => ({ token: link && link.kind !== "verify" ? link.token : "", fullName: "", displayName: "", password: "" }));
   const [company, setCompany] = useState("");
 
   function go(next: Mode, msg: string | null = null) {
@@ -118,19 +130,20 @@ export default function LoginScreen() {
     await startCompanyRegistration({ companyName: company.trim(), adminEmail: email.trim() });
     go({ k: "verify" }, "입력하신 이메일로 인증 코드를 보냈습니다. 메일의 코드를 입력해 주세요.");
   });
-  // 메일 링크로 들어온 경우: 토큰이 주소창·방문 기록에 남지 않게 URL을 먼저 정리하고, 인증을 한 번만 호출한다
-  // (StrictMode에서 effect가 두 번 실행돼도 ref로 막는다).
+  // 메일 링크로 들어온 경우: 토큰이 주소창·방문 기록에 남지 않게 URL을 먼저 정리한다(토큰은 화면 상태에만 둔다).
+  // 이메일 인증은 입력할 것이 없으므로 인증을 한 번만 자동 호출한다(StrictMode에서 effect가 두 번 실행돼도 ref로 막는다).
   const linkHandled = useRef(false);
   useEffect(() => {
-    if (!linkToken || linkHandled.current) return;
+    if (!link || linkHandled.current) return;
     linkHandled.current = true;
     window.history.replaceState(null, "", "/");
+    if (link.kind !== "verify") return;
     run(async () => {
-      const r = await verifyRegistrationEmail(linkToken);
+      const r = await verifyRegistrationEmail(link.token);
       go({ k: "regcomplete", challengeToken: r.challengeToken }, "이메일 인증이 완료되었습니다. 관리자 계정 정보를 입력해 주세요.");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkToken]);
+  }, [link]);
 
   const submitVerify = () => run(async () => {
     const r = await verifyRegistrationEmail(f.token.trim());
