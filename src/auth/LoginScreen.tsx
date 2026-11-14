@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   acceptInvitation, completeCompanyRegistration, completeLoginMfa, completePasswordReset, confirmAdminMfaBootstrap, login,
@@ -24,6 +24,14 @@ type Mode =
   | { k: "verify" }
   | { k: "regcomplete"; challengeToken: string };
 
+// 회사 가입 인증 메일의 링크: https://anok.space/auth/verify-email?token=...
+// 이 경로로 들어오면 토큰을 꺼내 인증 API(POST)를 자동 호출한다. 링크를 여는 GET 자체는 토큰을 소모하지 않는다.
+const VERIFY_LINK_PATH = "/auth/verify-email";
+function readVerifyLinkToken(): string | null {
+  if (window.location.pathname.replace(/\/+$/, "") !== VERIFY_LINK_PATH) return null;
+  return new URLSearchParams(window.location.search).get("token")?.trim() || null;
+}
+
 function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
   return (
     <div>
@@ -39,7 +47,8 @@ const linkCls = "text-[12px] text-indigo-500 hover:text-indigo-700 font-semibold
 
 export default function LoginScreen() {
   const { establish, sessionExpired, passwordChanged } = useAuth();
-  const [mode, setMode] = useState<Mode>({ k: "login" });
+  const [linkToken] = useState(readVerifyLinkToken);
+  const [mode, setMode] = useState<Mode>(() => (linkToken ? { k: "verify" } : { k: "login" }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -109,6 +118,20 @@ export default function LoginScreen() {
     await startCompanyRegistration({ companyName: company.trim(), adminEmail: email.trim() });
     go({ k: "verify" }, "입력하신 이메일로 인증 코드를 보냈습니다. 메일의 코드를 입력해 주세요.");
   });
+  // 메일 링크로 들어온 경우: 토큰이 주소창·방문 기록에 남지 않게 URL을 먼저 정리하고, 인증을 한 번만 호출한다
+  // (StrictMode에서 effect가 두 번 실행돼도 ref로 막는다).
+  const linkHandled = useRef(false);
+  useEffect(() => {
+    if (!linkToken || linkHandled.current) return;
+    linkHandled.current = true;
+    window.history.replaceState(null, "", "/");
+    run(async () => {
+      const r = await verifyRegistrationEmail(linkToken);
+      go({ k: "regcomplete", challengeToken: r.challengeToken }, "이메일 인증이 완료되었습니다. 관리자 계정 정보를 입력해 주세요.");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkToken]);
+
   const submitVerify = () => run(async () => {
     const r = await verifyRegistrationEmail(f.token.trim());
     setF(p => ({ ...p, token: "" }));
